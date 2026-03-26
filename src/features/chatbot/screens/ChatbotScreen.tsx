@@ -3,6 +3,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useEffect, useRef, useState } from "react";
 import {
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,22 +13,28 @@ import {
   View,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "../../../services/mockApi";
 import { colors, radius, shadows, spacing, typography } from "../../../theme/tokens";
 import { ChatMessage } from "../../../types/domain";
 
 const quickReplies = [
-  { label: "🎁 Tư vấn quà tặng", prompt: "gift" },
-  { label: "📦 Theo dõi đơn hàng", prompt: "order" },
-  { label: "🚚 Thông tin giao hàng", prompt: "shipping" },
-  { label: "🎟️ Voucher & ưu đãi", prompt: "voucher" },
+  { label: "🎁 Tu van qua tang", prompt: "gift" },
+  { label: "📦 Theo doi don hang", prompt: "order" },
+  { label: "🚚 Thong tin giao hang", prompt: "shipping" },
+  { label: "🎟️ Voucher va uu dai", prompt: "voucher" },
 ];
 
 export function ChatbotScreen() {
   const navigation = useNavigation<any>();
+  const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
+
+  const scrollToBottom = (animated = true) => {
+    scrollRef.current?.scrollToEnd({ animated });
+  };
 
   const initialChatQuery = useQuery({
     queryKey: ["chat-init"],
@@ -41,7 +49,7 @@ export function ChatbotScreen() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      scrollRef.current?.scrollToEnd({ animated: true });
+      scrollToBottom(true);
     }, 120);
 
     return () => clearTimeout(timer);
@@ -54,6 +62,7 @@ export function ChatbotScreen() {
         hour: "2-digit",
         minute: "2-digit",
       });
+
       setMessages((current) => [
         ...current,
         { id: `b-${Date.now()}`, role: "bot", text: reply, time },
@@ -64,12 +73,13 @@ export function ChatbotScreen() {
         hour: "2-digit",
         minute: "2-digit",
       });
+
       setMessages((current) => [
         ...current,
         {
           id: `b-${Date.now()}`,
           role: "bot",
-          text: "Xin lỗi, mình đang gặp trục trặc nhỏ. Bạn thử lại sau nhé.",
+          text: "Xin loi, minh dang gap truc trac nho. Ban thu lai sau nhe.",
           time,
         },
       ]);
@@ -78,7 +88,9 @@ export function ChatbotScreen() {
 
   const sendMessage = (displayText: string, prompt = displayText) => {
     const clean = displayText.trim();
-    if (!clean || mutation.isPending) return;
+    if (!clean || mutation.isPending) {
+      return;
+    }
 
     const time = new Date().toLocaleTimeString("vi-VN", {
       hour: "2-digit",
@@ -95,7 +107,10 @@ export function ChatbotScreen() {
 
   return (
     <View style={styles.root}>
-      <LinearGradient colors={[colors.primaryDark, colors.primary]} style={styles.header}>
+      <LinearGradient
+        colors={[colors.primaryDark, colors.primary]}
+        style={[styles.header, { paddingTop: insets.top + 12 }]}
+      >
         <View style={styles.headerRow}>
           <Pressable onPress={() => navigation.goBack()} style={styles.headerBack}>
             <MaterialIcons color={colors.white} name="arrow-back-ios-new" size={18} />
@@ -104,112 +119,126 @@ export function ChatbotScreen() {
             <MaterialIcons color={colors.white} name="smart-toy" size={20} />
           </View>
           <View style={styles.headerContent}>
-            <Text style={styles.headerTitle}>GiftBox Trợ Lý</Text>
+            <Text style={styles.headerTitle}>GiftBox Tro Ly</Text>
             <View style={styles.statusRow}>
               <View style={styles.statusDot} />
-              <Text style={styles.statusText}>Đang hoạt động</Text>
+              <Text style={styles.statusText}>Dang hoat dong</Text>
             </View>
           </View>
         </View>
       </LinearGradient>
 
-      <ScrollView
-        ref={scrollRef}
-        contentContainerStyle={styles.messages}
-        showsVerticalScrollIndicator={false}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 12}
+        style={styles.flex}
       >
-        {messages.map((message) => (
-          <View
-            key={message.id}
-            style={[
-              styles.messageRow,
-              message.role === "user" ? styles.messageRowRight : styles.messageRowLeft,
-            ]}
-          >
-            {message.role === "bot" ? (
+        <ScrollView
+          ref={scrollRef}
+          style={styles.messagesScroll}
+          contentContainerStyle={styles.messages}
+          keyboardShouldPersistTaps="handled"
+          onContentSizeChange={() => scrollToBottom(false)}
+          showsVerticalScrollIndicator={false}
+        >
+          {messages.map((message) => (
+            <View
+              key={message.id}
+              style={[
+                styles.messageRow,
+                message.role === "user" ? styles.messageRowRight : styles.messageRowLeft,
+              ]}
+            >
+              {message.role === "bot" ? (
+                <View style={styles.botBubbleIcon}>
+                  <MaterialIcons color={colors.white} name="smart-toy" size={14} />
+                </View>
+              ) : null}
+              <View
+                style={[
+                  styles.messageBlock,
+                  message.role === "user" ? styles.messageBlockRight : styles.messageBlockLeft,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.bubble,
+                    message.role === "user" ? styles.userBubble : styles.botBubble,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.bubbleText,
+                      message.role === "user" && styles.userBubbleText,
+                    ]}
+                  >
+                    {message.text}
+                  </Text>
+                </View>
+                <Text style={styles.messageTime}>{message.time}</Text>
+              </View>
+            </View>
+          ))}
+
+          {mutation.isPending ? (
+            <View style={[styles.messageRow, styles.messageRowLeft]}>
               <View style={styles.botBubbleIcon}>
                 <MaterialIcons color={colors.white} name="smart-toy" size={14} />
               </View>
-            ) : null}
-            <View
-              style={[
-                styles.messageBlock,
-                message.role === "user" ? styles.messageBlockRight : styles.messageBlockLeft,
-              ]}
-            >
-              <View
+              <View style={styles.typingBubble}>
+                {[0, 1, 2].map((item) => (
+                  <View key={item} style={styles.typingDot} />
+                ))}
+              </View>
+            </View>
+          ) : null}
+        </ScrollView>
+
+        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.quickReplies}
+            style={styles.quickRepliesShell}
+          >
+            {quickReplies.map((item) => (
+              <Pressable
+                key={item.label}
+                onPress={() => sendMessage(item.label, item.prompt)}
+                style={styles.quickReplyChip}
+              >
+                <Text style={styles.quickReplyText}>{item.label}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+
+          <View style={styles.inputShell}>
+            <View style={styles.inputRow}>
+              <TextInput
+                placeholder="Nhap tin nhan..."
+                placeholderTextColor={colors.textMuted}
+                value={input}
+                onChangeText={setInput}
+                onFocus={() => setTimeout(() => scrollToBottom(true), 150)}
+                onSubmitEditing={() => sendMessage(input)}
+                returnKeyType="send"
+                style={styles.input}
+              />
+              <Pressable
+                onPress={() => sendMessage(input)}
+                disabled={!input.trim()}
                 style={[
-                  styles.bubble,
-                  message.role === "user" ? styles.userBubble : styles.botBubble,
+                  styles.sendButton,
+                  !input.trim() && styles.sendButtonDisabled,
                 ]}
               >
-                <Text
-                  style={[
-                    styles.bubbleText,
-                    message.role === "user" && styles.userBubbleText,
-                  ]}
-                >
-                  {message.text}
-                </Text>
-              </View>
-              <Text style={styles.messageTime}>{message.time}</Text>
+                <MaterialIcons color={colors.white} name="send" size={14} />
+              </Pressable>
             </View>
           </View>
-        ))}
-
-        {mutation.isPending ? (
-          <View style={styles.messageRow}>
-            <View style={styles.botBubbleIcon}>
-              <MaterialIcons color={colors.white} name="smart-toy" size={14} />
-            </View>
-            <View style={styles.typingBubble}>
-              {[0, 1, 2].map((item) => (
-                <View key={item} style={styles.typingDot} />
-              ))}
-            </View>
-          </View>
-        ) : null}
-      </ScrollView>
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.quickReplies}
-        style={styles.quickRepliesShell}
-      >
-        {quickReplies.map((item) => (
-          <Pressable
-            key={item.label}
-            onPress={() => sendMessage(item.label, item.prompt)}
-            style={styles.quickReplyChip}
-          >
-            <Text style={styles.quickReplyText}>{item.label}</Text>
-          </Pressable>
-        ))}
-      </ScrollView>
-
-      <View style={styles.inputShell}>
-        <View style={styles.inputRow}>
-          <TextInput
-            placeholder="Nhập tin nhắn..."
-            placeholderTextColor={colors.textMuted}
-            value={input}
-            onChangeText={setInput}
-            onSubmitEditing={() => sendMessage(input)}
-            style={styles.input}
-          />
-          <Pressable
-            onPress={() => sendMessage(input)}
-            disabled={!input.trim()}
-            style={[
-              styles.sendButton,
-              !input.trim() && styles.sendButtonDisabled,
-            ]}
-          >
-            <MaterialIcons color={colors.white} name="send" size={14} />
-          </Pressable>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -219,8 +248,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.ivory,
   },
+  flex: {
+    flex: 1,
+  },
   header: {
-    paddingTop: 52,
     paddingHorizontal: 20,
     paddingBottom: 16,
   },
@@ -269,9 +300,13 @@ const styles = StyleSheet.create({
     fontSize: typography.tiny,
     color: "rgba(255,255,255,0.78)",
   },
+  messagesScroll: {
+    flex: 1,
+  },
   messages: {
     paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingTop: 16,
+    paddingBottom: 24,
     gap: spacing.base,
   },
   messageRow: {
@@ -348,21 +383,32 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: colors.textMuted,
   },
+  footer: {
+    backgroundColor: colors.white,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: 8,
+  },
   quickRepliesShell: {
-    maxHeight: 46,
+    minHeight: 48,
+    maxHeight: 56,
   },
   quickReplies: {
     paddingHorizontal: 16,
     paddingBottom: 8,
     gap: 8,
+    alignItems: "center",
   },
   quickReplyChip: {
+    minHeight: 36,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: radius.full,
     backgroundColor: colors.white,
     borderWidth: 1.5,
     borderColor: colors.gold,
+    alignItems: "center",
+    justifyContent: "center",
   },
   quickReplyText: {
     fontSize: typography.caption,
@@ -370,12 +416,8 @@ const styles = StyleSheet.create({
     color: colors.primary,
   },
   inputShell: {
-    backgroundColor: colors.white,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
     paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 28,
+    paddingTop: 4,
   },
   inputRow: {
     minHeight: 48,
@@ -393,6 +435,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: typography.body,
     color: colors.text,
+    paddingVertical: 12,
   },
   sendButton: {
     width: 32,

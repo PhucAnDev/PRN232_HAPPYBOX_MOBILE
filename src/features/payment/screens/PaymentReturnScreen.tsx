@@ -1,200 +1,132 @@
-import * as WebBrowser from "expo-web-browser";
 import { MaterialIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { AppScreen } from "../../../components/common/Primitives";
+import { fetchOrderByBackendId } from "../../../services/backendData";
 import {
-  buildMomoReturnUrl,
   clearPendingMomoOrderId,
-  savePendingMomoOrderId,
+  getPendingMomoOrderId,
+  resolveMomoOrderId,
+  resolveMomoOrderIdFromReturnUrl,
 } from "../../../services/paymentSession";
 import paymentService from "../../../services/paymentService";
 import { useAppStore } from "../../../store/useAppStore";
 import { colors, radius, shadows, spacing, typography } from "../../../theme/tokens";
 import { formatPrice } from "../../../utils/format";
 
-type PaymentState = "processing" | "success" | "failed";
+type ReturnState = "processing" | "success" | "failed";
 
-const paymentLabels: Record<string, string> = {
-  cod: "Thanh toan khi nhan hang",
-  bank: "Chuyen khoan ngan hang",
-  momo: "Vi MoMo",
-  vnpay: "VNPay",
-};
-
-export function PaymentScreen() {
+export function PaymentReturnScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const user = useAppStore((state) => state.user);
-  const cartItems = useAppStore((state) => state.cartItems);
-  const appliedVoucher = useAppStore((state) => state.appliedVoucher);
-  const checkoutDraft = useAppStore((state) => state.checkoutDraft);
-  const placeOrder = useAppStore((state) => state.placeOrder);
-  const [state, setState] = useState<PaymentState>("processing");
-  const [orderId, setOrderId] = useState("");
+  const clearCart = useAppStore((state) => state.clearCart);
+  const setCheckoutDraft = useAppStore((state) => state.setCheckoutDraft);
+  const upsertOrder = useAppStore((state) => state.upsertOrder);
+  const [state, setState] = useState<ReturnState>("processing");
+  const [orderId, setOrderId] = useState(route.params?.orderId ?? "");
+  const [amount, setAmount] = useState<number>(route.params?.total ?? 0);
   const [errorMessage, setErrorMessage] = useState("");
-  const [processingMessage, setProcessingMessage] = useState("");
-
-  const paymentMethod = route.params?.paymentMethod ?? "cod";
-  const total = route.params?.total ?? 0;
+  const [processingMessage, setProcessingMessage] = useState(
+    "Dang xac minh ket qua thanh toan MoMo...",
+  );
 
   useEffect(() => {
     let active = true;
 
-    const timer = setTimeout(async () => {
-      if (paymentMethod === "momo") {
-        const shippingPhone = checkoutDraft?.phone?.trim() ?? "";
-        const shippingAddress = [
-          checkoutDraft?.address,
-          checkoutDraft?.ward,
-          checkoutDraft?.district,
-          checkoutDraft?.city,
-        ]
-          .filter(Boolean)
-          .join(", ");
+    const verifyPayment = async () => {
+      const storedOrderId = await getPendingMomoOrderId();
+      const resolvedOrderId =
+        resolveMomoOrderIdFromReturnUrl(route.params?.returnUrl) ??
+        resolveMomoOrderId({
+          orderId: typeof route.params?.orderId === "string" ? route.params.orderId : null,
+          extraData: typeof route.params?.extraData === "string" ? route.params.extraData : null,
+        }) ??
+        storedOrderId;
 
-        if (!checkoutDraft || !shippingPhone || !shippingAddress || cartItems.length === 0) {
-          if (active) {
-            setErrorMessage("Thieu thong tin giao hang hoac gio hang de tao thanh toan MoMo.");
-            setState("failed");
-          }
-          return;
-        }
-
-        if (cartItems.some((item) => item.type === "custom")) {
-          if (active) {
-            setErrorMessage("MoMo hien chua ho tro custom gift box trong app mobile.");
-            setState("failed");
-          }
-          return;
-        }
-
-        try {
-          if (active) {
-            setProcessingMessage("Dang tao don thanh toan MoMo...");
-          }
-
-          const redirectUrl = buildMomoReturnUrl();
-          const response = await paymentService.createMomoOrder({
-            userId: user?.id,
-            note: checkoutDraft?.note || null,
-            paymentMethod: "MOMO",
-            voucherId: appliedVoucher?.id ?? null,
-            shippingPhone,
-            shippingAddress,
-            orderDetails: cartItems.map((item) => ({
-              productId: item.type === "product" ? item.productId : null,
-              giftBoxId: item.type === "giftbox" ? item.productId : null,
-              quantity: item.quantity,
-              price: item.price,
-            })),
-          });
-
-          const momoOrder = response.data.data;
-
-          if (!momoOrder.payUrl) {
-            throw new Error("MoMo khong tra ve payUrl hop le.");
-          }
-
-          await savePendingMomoOrderId(momoOrder.orderId);
-
-          if (active) {
-            setProcessingMessage("Dang mo cong thanh toan MoMo...");
-          }
-
-          const authResult = await WebBrowser.openAuthSessionAsync(
-            momoOrder.payUrl,
-            redirectUrl,
-          );
-
-          if (!active) {
-            return;
-          }
-
-          if (authResult.type === "success") {
-            navigation.replace("PaymentReturn", {
-              orderId: momoOrder.orderId,
-              total,
-              returnUrl: authResult.url,
-            });
-            return;
-          }
-
-          if (authResult.type === "cancel" || authResult.type === "dismiss") {
-            navigation.replace("PaymentReturn", {
-              orderId: momoOrder.orderId,
-              total,
-            });
-            return;
-          }
-
-          navigation.replace("PaymentReturn", {
-            orderId: momoOrder.orderId,
-            total,
-          });
-          return;
-        } catch (error) {
-          await clearPendingMomoOrderId();
-
-          if (active) {
-            const message =
-              (error as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-              (error as Error)?.message ||
-              "Khong the tao hoac mo thanh toan MoMo.";
-            setErrorMessage(message);
-            setState("failed");
-          }
-          return;
-        }
-      }
-
-      if (paymentMethod === "vnpay") {
+      if (!resolvedOrderId) {
         if (active) {
-          setErrorMessage("VNPay mobile flow chua duoc tich hop trong phien ban nay.");
+          setErrorMessage("Khong xac dinh duoc don hang MoMo de doi soat.");
           setState("failed");
         }
+        await clearPendingMomoOrderId();
         return;
       }
 
-      const order = await placeOrder();
-
-      if (!active) {
-        return;
+      if (active) {
+        setOrderId(resolvedOrderId);
+        setProcessingMessage("Dang doi soat trang thai giao dich voi MoMo...");
       }
 
-      if (order) {
-        setOrderId(order.id);
-        setState("success");
-      } else {
-        setErrorMessage("Khong the hoan tat don hang. Vui long kiem tra lai thong tin checkout.");
-        setState("failed");
+      try {
+        const paymentStatus = await paymentService.confirmMomoPayment(resolvedOrderId);
+
+        if (!active) {
+          return;
+        }
+
+        setAmount(paymentStatus.amount || route.params?.total || 0);
+
+        if (
+          paymentStatus.resultCode === 0 ||
+          paymentStatus.localPaymentStatus === "Success"
+        ) {
+          setProcessingMessage("Dang dong bo don hang ve app...");
+
+          try {
+            const resolvedOrder = await fetchOrderByBackendId(resolvedOrderId, user);
+
+            if (!active) {
+              return;
+            }
+
+            upsertOrder(resolvedOrder);
+            setOrderId(resolvedOrder.id);
+            setAmount(resolvedOrder.total);
+          } catch {
+            // Keep success state even if the snapshot fetch lags behind.
+          }
+
+          clearCart();
+          setCheckoutDraft(null);
+          setState("success");
+        } else {
+          setErrorMessage(
+            paymentStatus.message ||
+              "Giao dich MoMo chua thanh cong. Vui long kiem tra lai don hang.",
+          );
+          setState("failed");
+        }
+      } catch (error) {
+        if (active) {
+          const message =
+            (error as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+            (error as Error)?.message ||
+            "Khong the xac minh trang thai thanh toan MoMo.";
+          setErrorMessage(message);
+          setState("failed");
+        }
+      } finally {
+        await clearPendingMomoOrderId();
       }
-    }, 1600);
+    };
+
+    void verifyPayment();
 
     return () => {
       active = false;
-      clearTimeout(timer);
     };
-  }, [
-    appliedVoucher,
-    cartItems,
-    checkoutDraft,
-    navigation,
-    paymentMethod,
-    placeOrder,
-    total,
-    user,
-  ]);
+  }, [clearCart, route.params, setCheckoutDraft, upsertOrder, user]);
 
   const tone = useMemo(() => {
     if (state === "success") {
       return {
         colors: ["#1B4332", "#2D6A4F"] as const,
         icon: "check-circle",
-        title: "Dat hang thanh cong!",
-        subtitle: "Cam on ban da tin tuong GiftBox. Don hang dang duoc xu ly.",
+        title: "Thanh toan MoMo thanh cong!",
+        subtitle: "Don hang cua ban da duoc xac nhan va dong bo ve app.",
       };
     }
 
@@ -202,41 +134,49 @@ export function PaymentScreen() {
       return {
         colors: ["#7F1D1D", colors.error] as const,
         icon: "cancel",
-        title: "Thanh toan that bai",
+        title: "Khong xac minh duoc giao dich",
         subtitle:
           errorMessage ||
-          "Giao dich khong thanh cong. Vui long kiem tra lai va thu lai.",
+          "Khong the hoan tat doi soat thanh toan. Vui long kiem tra lai don hang.",
       };
     }
 
     return {
       colors: [colors.primaryDark, colors.primary] as const,
-      icon: "payments",
-      title: "Dang xu ly thanh toan",
-      subtitle:
-        processingMessage ||
-        paymentLabels[paymentMethod] ||
-        "Dang ket noi cong thanh toan...",
+      icon: "sync",
+      title: "Dang xac minh thanh toan",
+      subtitle: processingMessage,
     };
-  }, [errorMessage, paymentMethod, processingMessage, state]);
+  }, [errorMessage, processingMessage, state]);
+
+  const openOrder = () => {
+    navigation.reset({
+      index: 1,
+      routes: [
+        { name: "MainTabs", params: { screen: "OrdersTab" } },
+        { name: "OrderDetail", params: { orderId } },
+      ],
+    });
+  };
 
   if (state === "processing") {
     return (
       <LinearGradient colors={tone.colors} style={styles.processingRoot}>
         <View style={styles.processingCircle}>
-          <Text style={styles.processingEmoji}>💳</Text>
+          <MaterialIcons color={colors.white} name="sync" size={40} />
         </View>
         <Text style={styles.processingTitle}>{tone.title}</Text>
         <Text style={styles.processingSubtitle}>{tone.subtitle}</Text>
-        <View style={styles.processingAmount}>
-          <Text style={styles.processingAmountText}>{formatPrice(total)}</Text>
-        </View>
-
+        {amount > 0 ? (
+          <View style={styles.processingAmount}>
+            <Text style={styles.processingAmountText}>{formatPrice(amount)}</Text>
+          </View>
+        ) : null}
         <View style={styles.processingSteps}>
           {[
-            "Khoi tao giao dich...",
-            paymentMethod === "momo" ? "Mo cong MoMo..." : "Xac thuc giao dich...",
-            "Dang hoan tat don hang...",
+            "Nhan callback tu cong thanh toan...",
+            "Doi soat trang thai giao dich...",
+            "Dong bo don hang ve app...",
           ].map((item) => (
             <View key={item} style={styles.processingRow}>
               <View style={styles.processingDot} />
@@ -259,60 +199,45 @@ export function PaymentScreen() {
           <Text style={styles.bannerSubtitle}>{tone.subtitle}</Text>
         </LinearGradient>
 
-        {state === "success" ? (
-          <View style={styles.body}>
-            <View style={styles.summaryCard}>
-              <InfoRow label="Ma don hang" value={orderId || "--"} highlight />
-              <InfoRow label="Phuong thuc" value={paymentLabels[paymentMethod] || "--"} />
-              <InfoRow label="Tong thanh toan" value={formatPrice(total)} highlight />
-              <InfoRow label="Giao hang du kien" value="2-3 ngay lam viec" />
-            </View>
-
-            <View style={styles.centerMessage}>
-              <Text style={styles.centerEmoji}>🎁</Text>
-              <Text style={styles.centerText}>
-                Chung toi se thong bao khi don hang duoc xac nhan va giao hang.
-              </Text>
-            </View>
+        <View style={styles.body}>
+          <View style={styles.summaryCard}>
+            <InfoRow label="Ma don hang" value={orderId || "--"} highlight />
+            <InfoRow label="Phuong thuc" value="Vi MoMo" />
+            <InfoRow
+              label="Tong thanh toan"
+              value={amount > 0 ? formatPrice(amount) : "--"}
+              highlight
+            />
           </View>
-        ) : (
-          <View style={[styles.body, styles.failedBody]}>
-            <Text style={styles.centerEmoji}>😕</Text>
+
+          <View style={styles.centerMessage}>
+            <Text style={styles.centerEmoji}>{state === "success" ? "🎁" : "😕"}</Text>
             <Text style={styles.centerText}>
-              {errorMessage || "Co loi xay ra trong qua trinh thanh toan."}
+              {state === "success"
+                ? "Ban co the mo chi tiet don hang de theo doi trang thai xu ly va giao hang."
+                : "Neu ban da thanh toan nhung app chua dong bo kip, hay vao Don hang de kiem tra lai."}
             </Text>
           </View>
-        )}
+        </View>
 
         <View style={styles.footer}>
-          {state === "success" ? (
-            <>
-              <PrimaryButton
-                label="Theo Doi Don Hang"
-                onPress={() =>
-                  navigation.reset({
-                    index: 1,
-                    routes: [
-                      { name: "MainTabs", params: { screen: "OrdersTab" } },
-                      { name: "OrderDetail", params: { orderId } },
-                    ],
-                  })
-                }
-              />
-              <SecondaryButton
-                label="Ve Trang Chu"
-                onPress={() => navigation.reset({ index: 0, routes: [{ name: "MainTabs" }] })}
-              />
-            </>
+          {state === "success" || orderId ? (
+            <PrimaryButton label="Xem Don Hang" onPress={openOrder} />
           ) : (
-            <>
-              <PrimaryButton label="Quay Lai Checkout" onPress={() => navigation.goBack()} />
-              <SecondaryButton
-                label="Ve Trang Chu"
-                onPress={() => navigation.reset({ index: 0, routes: [{ name: "MainTabs" }] })}
-              />
-            </>
+            <PrimaryButton
+              label="Ve Gio Hang"
+              onPress={() =>
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: "MainTabs", params: { screen: "CartTab" } }],
+                })
+              }
+            />
           )}
+          <SecondaryButton
+            label="Ve Trang Chu"
+            onPress={() => navigation.reset({ index: 0, routes: [{ name: "MainTabs" }] })}
+          />
         </View>
       </View>
     </AppScreen>
@@ -386,9 +311,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: spacing.xl,
-  },
-  processingEmoji: {
-    fontSize: 40,
   },
   processingTitle: {
     fontSize: 22,
@@ -466,10 +388,6 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
     paddingTop: 24,
-  },
-  failedBody: {
-    alignItems: "center",
-    justifyContent: "center",
   },
   summaryCard: {
     backgroundColor: colors.white,

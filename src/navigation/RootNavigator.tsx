@@ -1,10 +1,12 @@
 import {
   DefaultTheme,
+  type LinkingOptions,
   NavigationContainer,
 } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import React from "react";
+import * as Linking from "expo-linking";
 import { BottomTabBar } from "../components/navigation/BottomTabBar";
 import { AccountScreen, AddressFormScreen, AddressListScreen, EditProfileScreen, WishlistScreen } from "../features/account/screens/AccountScreens";
 import { ForgotPasswordScreen, OnboardingScreen, SignInScreen, SignUpScreen, SplashScreen } from "../features/auth/screens/AuthScreens";
@@ -14,6 +16,7 @@ import { GiftBoxBuilderScreen, GiftBoxDetailScreen, GiftBoxListScreen } from "..
 import { HomeScreen } from "../features/home/screens/HomeScreen";
 import { NotificationsScreen } from "../features/notifications/screens/NotificationsScreen";
 import { OrderDetailScreen, OrdersScreen } from "../features/orders/screens/OrderScreens";
+import { PaymentReturnScreen } from "../features/payment/screens/PaymentReturnScreen";
 import { PaymentScreen } from "../features/payment/screens/PaymentScreen";
 import { ProductDetailScreen, ProductListScreen } from "../features/shop/screens/ShopScreens";
 import { VoucherCenterScreen } from "../features/vouchers/screens/VoucherCenterScreen";
@@ -32,6 +35,15 @@ const navigationTheme = {
     text: colors.text,
     border: colors.border,
     primary: colors.primary,
+  },
+};
+
+const linking: LinkingOptions<RootStackParamList> = {
+  prefixes: [Linking.createURL("/")],
+  config: {
+    screens: {
+      PaymentReturn: "payment/momo-return",
+    },
   },
 };
 
@@ -54,7 +66,7 @@ function AppTabs() {
 
 export function RootNavigator() {
   return (
-    <NavigationContainer theme={navigationTheme}>
+    <NavigationContainer linking={linking} theme={navigationTheme}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Splash" component={SplashScreen} />
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
@@ -69,6 +81,7 @@ export function RootNavigator() {
         <Stack.Screen name="GiftBoxBuilder" component={GiftBoxBuilderScreen} />
         <Stack.Screen name="Checkout" component={CheckoutScreen} />
         <Stack.Screen name="Payment" component={PaymentScreen} />
+        <Stack.Screen name="PaymentReturn" component={PaymentReturnScreen} />
         <Stack.Screen name="OrderDetail" component={OrderDetailScreen} />
         <Stack.Screen name="EditProfile" component={EditProfileScreen} />
         <Stack.Screen name="AddressList" component={AddressListScreen} />

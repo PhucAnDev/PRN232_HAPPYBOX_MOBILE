@@ -1,6 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { MaterialIcons } from "@expo/vector-icons";
-import React, { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import React, { useEffect, useMemo } from "react";
 import { Controller, useForm } from "react-hook-form";
 import {
   Image,
@@ -18,7 +19,9 @@ import { AddressCard } from "../../../components/cards/AddressCard";
 import { ProductCard } from "../../../components/cards/ProductCard";
 import { AppScreen, EmptyState, Field } from "../../../components/common/Primitives";
 import { AppHeader } from "../../../components/navigation/AppHeader";
+import { USE_MOCK_API } from "../../../constants/env";
 import { giftBoxes, products } from "../../../mocks/data";
+import { fetchUserAddresses, fetchUserOrders, fetchUserProfileData } from "../../../services/backendData";
 import { useAppStore } from "../../../store/useAppStore";
 import { Address } from "../../../types/domain";
 import { colors, radius, shadows, spacing, typography } from "../../../theme/tokens";
@@ -46,10 +49,49 @@ type AddressValues = z.infer<typeof addressSchema>;
 
 export function AccountScreen() {
   const navigation = useNavigation<any>();
-  const user = useAppStore((state) => state.user);
-  const orders = useAppStore((state) => state.orders);
+  const storeUser = useAppStore((state) => state.user);
+  const isAuthenticated = useAppStore((state) => state.isAuthenticated);
+  const storeOrders = useAppStore((state) => state.orders);
+  const hydrateUser = useAppStore((state) => state.hydrateUser);
+  const hydrateOrders = useAppStore((state) => state.hydrateOrders);
+  const hydrateAddresses = useAppStore((state) => state.hydrateAddresses);
   const wishlist = useAppStore((state) => state.wishlist);
   const logout = useAppStore((state) => state.logout);
+  const profileQuery = useQuery({
+    queryKey: ["userProfile", storeUser?.id],
+    queryFn: () => fetchUserProfileData(storeUser!.id),
+    enabled: Boolean(storeUser?.id && isAuthenticated && !USE_MOCK_API),
+  });
+  const ordersQuery = useQuery({
+    queryKey: ["orders", storeUser?.id],
+    queryFn: () => fetchUserOrders(storeUser!.id, profileQuery.data ?? storeUser),
+    enabled: Boolean(storeUser?.id && isAuthenticated && !USE_MOCK_API),
+  });
+  const addressesQuery = useQuery({
+    queryKey: ["addresses", storeUser?.id],
+    queryFn: () => fetchUserAddresses(storeUser!.id),
+    enabled: Boolean(storeUser?.id && isAuthenticated && !USE_MOCK_API),
+  });
+  const user = profileQuery.data ?? storeUser;
+  const orders = ordersQuery.data ?? storeOrders;
+
+  useEffect(() => {
+    if (profileQuery.data) {
+      hydrateUser(profileQuery.data);
+    }
+  }, [hydrateUser, profileQuery.data]);
+
+  useEffect(() => {
+    if (ordersQuery.data) {
+      hydrateOrders(ordersQuery.data);
+    }
+  }, [hydrateOrders, ordersQuery.data]);
+
+  useEffect(() => {
+    if (addressesQuery.data && addressesQuery.data.length > 0) {
+      hydrateAddresses(addressesQuery.data);
+    }
+  }, [addressesQuery.data, hydrateAddresses]);
 
   const orderStats = [
     { label: "Tất cả", count: orders.length },
@@ -323,9 +365,27 @@ export function EditProfileScreen() {
 
 export function AddressListScreen() {
   const navigation = useNavigation<any>();
-  const addresses = useAppStore((state) => state.addresses);
+  const user = useAppStore((state) => state.user);
+  const isAuthenticated = useAppStore((state) => state.isAuthenticated);
+  const storeAddresses = useAppStore((state) => state.addresses);
+  const hydrateAddresses = useAppStore((state) => state.hydrateAddresses);
   const setDefaultAddress = useAppStore((state) => state.setDefaultAddress);
   const deleteAddress = useAppStore((state) => state.deleteAddress);
+  const addressesQuery = useQuery({
+    queryKey: ["addresses", user?.id],
+    queryFn: () => fetchUserAddresses(user!.id),
+    enabled: Boolean(user?.id && isAuthenticated && !USE_MOCK_API),
+  });
+  const addresses =
+    addressesQuery.data && addressesQuery.data.length > 0
+      ? addressesQuery.data
+      : storeAddresses;
+
+  useEffect(() => {
+    if (addressesQuery.data && addressesQuery.data.length > 0) {
+      hydrateAddresses(addressesQuery.data);
+    }
+  }, [addressesQuery.data, hydrateAddresses]);
 
   return (
     <AppScreen backgroundColor={colors.ivory} scroll={false}>

@@ -374,6 +374,7 @@ export function SignUpScreen() {
         fullName: payload.fullName,
         email: payload.email,
         phone: payload.phone,
+        password: payload.password,
       }),
     onSuccess: (user) => {
       signup(user);

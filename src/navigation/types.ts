@@ -23,6 +23,16 @@ export type RootStackParamList = {
   GiftBoxBuilder: undefined;
   Checkout: undefined;
   Payment: { paymentMethod: PaymentMethodId; total: number };
+  PaymentReturn:
+    | {
+        orderId?: string | null;
+        total?: number;
+        returnUrl?: string;
+        extraData?: string;
+        resultCode?: string;
+        message?: string;
+      }
+    | undefined;
   OrderDetail: { orderId?: string | null };
   EditProfile: undefined;
   AddressList: undefined;

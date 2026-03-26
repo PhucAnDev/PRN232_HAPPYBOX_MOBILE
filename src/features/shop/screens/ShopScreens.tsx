@@ -16,10 +16,17 @@ import { ProductCard } from "../../../components/cards/ProductCard";
 import { AppHeader } from "../../../components/navigation/AppHeader";
 import { api } from "../../../services/mockApi";
 import { useAppStore } from "../../../store/useAppStore";
+import { Product } from "../../../types/domain";
 import { colors, radius, shadows, spacing } from "../../../theme/tokens";
 import { formatPrice } from "../../../utils/format";
 
 const sortOptions = ["Phổ biến", "Giá tăng dần", "Giá giảm dần", "Mới nhất"] as const;
+
+const GIFTBOX_CATEGORY_ID = "giftbox";
+
+type CatalogListItem = Product & {
+  kind: "product" | "giftbox";
+};
 
 export function ProductListScreen() {
   const navigation = useNavigation<any>();
@@ -35,13 +42,44 @@ export function ProductListScreen() {
     queryKey: ["products"],
     queryFn: api.products.list,
   });
+  const giftBoxesQuery = useQuery({
+    queryKey: ["giftBoxes"],
+    queryFn: api.giftBoxes.list,
+  });
   const categoriesQuery = useQuery({
     queryKey: ["categories"],
     queryFn: api.products.categories,
   });
 
+  const catalogItems = useMemo<CatalogListItem[]>(() => {
+    const products = (productsQuery.data ?? []).map((product) => ({
+      ...product,
+      kind: "product" as const,
+    }));
+
+    const giftBoxes = (giftBoxesQuery.data ?? []).map((giftBox) => ({
+      id: giftBox.id,
+      name: giftBox.name,
+      price: giftBox.price,
+      originalPrice: giftBox.originalPrice,
+      image: giftBox.image,
+      category: "Há»™p quÃ ",
+      categoryId: GIFTBOX_CATEGORY_ID,
+      rating: 5,
+      reviewCount: 0,
+      badge: giftBox.tag,
+      description: giftBox.description,
+      details: giftBox.items,
+      isNew: false,
+      isBestSeller: giftBox.tag.toLowerCase().includes("best"),
+      kind: "giftbox" as const,
+    }));
+
+    return [...products, ...giftBoxes];
+  }, [giftBoxesQuery.data, productsQuery.data]);
+
   const filtered = useMemo(() => {
-    let list = [...(productsQuery.data ?? [])];
+    let list = [...catalogItems];
     if (activeCategory !== "all") {
       list = list.filter((item) => item.categoryId === activeCategory);
     }
@@ -58,9 +96,40 @@ export function ProductListScreen() {
       list = list.filter((item) => item.isNew).concat(list.filter((item) => !item.isNew));
     }
     return list;
-  }, [activeCategory, productsQuery.data, query, sortBy]);
+  }, [activeCategory, catalogItems, query, sortBy]);
 
-  const categories = [{ id: "all", name: "Tất Cả", icon: "🛍️" }, ...(categoriesQuery.data ?? [])];
+  const categories = [
+    { id: "all", name: "Tất Cả", icon: "🛍️" },
+    { id: GIFTBOX_CATEGORY_ID, name: "Hộp Quà", icon: "🎁", color: colors.primary },
+    ...(categoriesQuery.data ?? []),
+  ];
+
+  const openCatalogItem = (item: CatalogListItem) => {
+    if (item.kind === "giftbox") {
+      navigation.navigate("GiftBoxDetail", { giftBoxId: item.id });
+      return;
+    }
+
+    navigation.navigate("ProductDetail", { productId: item.id });
+  };
+
+  const addCatalogItemToCart = (item: CatalogListItem) => {
+    addToCart({
+      productId: item.id,
+      name: item.name,
+      image: item.image,
+      price: item.price,
+      quantity: 1,
+      type: item.kind === "giftbox" ? "giftbox" : "product",
+    });
+    Toast.show({
+      type: "success",
+      text1:
+        item.kind === "giftbox"
+          ? "Đã thêm hộp quà vào giỏ hàng"
+          : "Đã thêm vào giỏ hàng",
+    });
+  };
 
   return (
     <View style={styles.listRoot}>
@@ -75,7 +144,7 @@ export function ProductListScreen() {
         <View style={styles.searchShell}>
           <MaterialIcons color={colors.textMuted} name="search" size={16} />
           <TextInput
-            placeholder="Tìm kiếm sản phẩm..."
+            placeholder="Tìm kiếm sản phẩm, hộp quà..."
             placeholderTextColor={colors.textMuted}
             style={styles.searchInput}
             value={query}
@@ -110,7 +179,7 @@ export function ProductListScreen() {
       </View>
 
       <View style={styles.toolbar}>
-        <Text style={styles.toolbarCount}>{filtered.length} sản phẩm</Text>
+        <Text style={styles.toolbarCount}>{filtered.length} mục</Text>
         <View style={styles.toolbarActions}>
           <View style={styles.sortWrap}>
             <Pressable onPress={() => setShowSort((value) => !value)} style={styles.sortButton}>
@@ -157,8 +226,8 @@ export function ProductListScreen() {
         {filtered.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyEmoji}>🔍</Text>
-            <Text style={styles.emptyTitle}>Không tìm thấy sản phẩm</Text>
-            <Text style={styles.emptySubtitle}>Thử tìm kiếm với từ khóa khác</Text>
+            <Text style={styles.emptyTitle}>Không tìm thấy sản phẩm hoặc hộp quà</Text>
+            <Text style={styles.emptySubtitle}>Thử tìm kiếm với từ khóa hoặc bộ lọc khác</Text>
             <Pressable
               onPress={() => {
                 setQuery("");
@@ -175,8 +244,10 @@ export function ProductListScreen() {
               <ProductCard
                 key={product.id}
                 product={product}
-                onPress={() => navigation.navigate("ProductDetail", { productId: product.id })}
+                onPress={() => openCatalogItem(product)}
                 onAdd={() => {
+                  addCatalogItemToCart(product);
+                  return;
                   addToCart({
                     productId: product.id,
                     name: product.name,
@@ -197,8 +268,10 @@ export function ProductListScreen() {
                 key={product.id}
                 mode="list"
                 product={product}
-                onPress={() => navigation.navigate("ProductDetail", { productId: product.id })}
+                onPress={() => openCatalogItem(product)}
                 onAdd={() => {
+                  addCatalogItemToCart(product);
+                  return;
                   addToCart({
                     productId: product.id,
                     name: product.name,

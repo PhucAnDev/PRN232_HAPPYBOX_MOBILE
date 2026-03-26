@@ -1,5 +1,6 @@
+import { useQuery } from "@tanstack/react-query";
 import { MaterialIcons } from "@expo/vector-icons";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Image,
   Pressable,
@@ -12,6 +13,8 @@ import { useNavigation, useRoute } from "@react-navigation/native";
 import { OrderCard } from "../../../components/cards/OrderCard";
 import { AppScreen, EmptyState } from "../../../components/common/Primitives";
 import { AppHeader } from "../../../components/navigation/AppHeader";
+import { USE_MOCK_API } from "../../../constants/env";
+import { fetchUserOrders } from "../../../services/backendData";
 import { useAppStore } from "../../../store/useAppStore";
 import { OrderStatus } from "../../../types/domain";
 import { colors, radius, shadows, spacing, typography } from "../../../theme/tokens";
@@ -28,8 +31,23 @@ const statusTabs: Array<{ key: OrderStatus | "all"; label: string }> = [
 
 export function OrdersScreen() {
   const navigation = useNavigation<any>();
-  const orders = useAppStore((state) => state.orders);
+  const user = useAppStore((state) => state.user);
+  const isAuthenticated = useAppStore((state) => state.isAuthenticated);
+  const storeOrders = useAppStore((state) => state.orders);
+  const hydrateOrders = useAppStore((state) => state.hydrateOrders);
   const [activeTab, setActiveTab] = useState<OrderStatus | "all">("all");
+  const ordersQuery = useQuery({
+    queryKey: ["orders", user?.id],
+    queryFn: () => fetchUserOrders(user!.id, user),
+    enabled: Boolean(user?.id && isAuthenticated && !USE_MOCK_API),
+  });
+  const orders = ordersQuery.data ?? storeOrders;
+
+  useEffect(() => {
+    if (ordersQuery.data) {
+      hydrateOrders(ordersQuery.data);
+    }
+  }, [hydrateOrders, ordersQuery.data]);
 
   const filtered = useMemo(
     () => orders.filter((order) => (activeTab === "all" ? true : order.status === activeTab)),
@@ -102,8 +120,23 @@ export function OrdersScreen() {
 export function OrderDetailScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
-  const orders = useAppStore((state) => state.orders);
+  const user = useAppStore((state) => state.user);
+  const isAuthenticated = useAppStore((state) => state.isAuthenticated);
+  const storeOrders = useAppStore((state) => state.orders);
+  const hydrateOrders = useAppStore((state) => state.hydrateOrders);
+  const ordersQuery = useQuery({
+    queryKey: ["orders", user?.id],
+    queryFn: () => fetchUserOrders(user!.id, user),
+    enabled: Boolean(user?.id && isAuthenticated && !USE_MOCK_API),
+  });
+  const orders = ordersQuery.data ?? storeOrders;
   const order = orders.find((item) => item.id === route.params?.orderId);
+
+  useEffect(() => {
+    if (ordersQuery.data) {
+      hydrateOrders(ordersQuery.data);
+    }
+  }, [hydrateOrders, ordersQuery.data]);
 
   if (!order) {
     return (
