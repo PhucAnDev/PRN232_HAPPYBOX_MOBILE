@@ -1,7 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { USE_MOCK_API } from "../constants/env";
 import { mockAddresses, mockUser, notifications } from "../mocks/data";
+import cartService from "../services/cartService";
+import { getAccessToken } from "../services/authSession";
+import { mergeRemoteCartWithLocal, mapPaymentMethodToApi, mapOrder } from "../services/apiMappers";
 import {
   Address,
   AppNotification,
@@ -13,6 +17,7 @@ import {
   Voucher,
 } from "../types/domain";
 import { calculateCartSummary } from "../utils/format";
+import { api } from "../services/mockApi";
 
 interface AppState {
   onboardingDone: boolean;
@@ -26,6 +31,11 @@ interface AppState {
   notifications: AppNotification[];
   customBoxDraft: CustomGiftBoxDraft | null;
   checkoutDraft: CheckoutDraft | null;
+  hydrateUser: (user: UserProfile | null) => void;
+  hydrateCartItems: (items: CartItem[]) => void;
+  hydrateOrders: (orders: Order[]) => void;
+  hydrateAddresses: (addresses: Address[]) => void;
+  upsertOrder: (order: Order) => void;
   completeOnboarding: () => void;
   login: (user: UserProfile) => void;
   signup: (user: UserProfile) => void;
@@ -50,11 +60,19 @@ interface AppState {
   setDefaultAddress: (addressId: string) => void;
   updateProfile: (payload: Partial<UserProfile>) => void;
   markNotificationRead: (notificationId: string) => void;
-  placeOrder: () => Order | null;
+  placeOrder: () => Promise<Order | null>;
 }
 
 const clonedAddresses = () => mockAddresses.map((item) => ({ ...item }));
 const clonedNotifications = () => notifications.map((item) => ({ ...item }));
+
+async function hasRemoteSession(isAuthenticated: boolean) {
+  if (USE_MOCK_API || !isAuthenticated) {
+    return false;
+  }
+
+  return Boolean(await getAccessToken());
+}
 
 export const useAppStore = create<AppState>()(
   persist(
@@ -70,17 +88,27 @@ export const useAppStore = create<AppState>()(
       notifications: clonedNotifications(),
       customBoxDraft: null,
       checkoutDraft: null,
+      hydrateUser: (user) => set({ user }),
+      hydrateCartItems: (items) => set({ cartItems: items }),
+      hydrateOrders: (orders) => set({ orders }),
+      hydrateAddresses: (addresses) => set({ addresses }),
+      upsertOrder: (order) =>
+        set((state) => ({
+          orders: [order, ...state.orders.filter((item) => item.id !== order.id)],
+        })),
       completeOnboarding: () => set({ onboardingDone: true }),
       login: (user) => set({ isAuthenticated: true, user }),
       signup: (user) => set({ isAuthenticated: true, user }),
-      logout: () =>
+      logout: () => {
+        void api.auth.signOut();
         set({
           isAuthenticated: false,
           user: null,
           cartItems: [],
           appliedVoucher: null,
           checkoutDraft: null,
-        }),
+        });
+      },
       addToCart: (item) =>
         set((state) => {
           const existing = state.cartItems.find(
@@ -98,7 +126,7 @@ export const useAppStore = create<AppState>()(
             };
           }
 
-          return {
+          const nextState = {
             cartItems: [
               ...state.cartItems,
               {
@@ -107,24 +135,108 @@ export const useAppStore = create<AppState>()(
               },
             ],
           };
+
+          void (async () => {
+            if (!(await hasRemoteSession(get().isAuthenticated)) || item.type === "custom") {
+              return;
+            }
+
+            try {
+              const remoteCart = await cartService.addItemToCart({
+                productId: item.type === "product" ? item.productId : null,
+                giftBoxId: item.type === "giftbox" ? item.productId : null,
+                quantity: item.quantity,
+              });
+
+              set((currentState) => ({
+                cartItems: mergeRemoteCartWithLocal(remoteCart.items, currentState.cartItems),
+              }));
+            } catch {
+              // Keep optimistic local cart if remote sync fails.
+            }
+          })();
+
+          return nextState;
         }),
       removeFromCart: (id) =>
-        set((state) => ({
-          cartItems: state.cartItems.filter((item) => item.id !== id),
-        })),
+        set((state) => {
+          const target = state.cartItems.find((item) => item.id === id);
+          const nextState = {
+            cartItems: state.cartItems.filter((item) => item.id !== id),
+          };
+
+          void (async () => {
+            if (
+              !(await hasRemoteSession(get().isAuthenticated)) ||
+              !target?.backendItemId ||
+              target.type === "custom"
+            ) {
+              return;
+            }
+
+            try {
+              await cartService.removeCartItem(target.backendItemId);
+            } catch {
+              // Keep local change if backend removal fails.
+            }
+          })();
+
+          return nextState;
+        }),
       updateCartQuantity: (id, quantity) => {
         if (quantity <= 0) {
           get().removeFromCart(id);
           return;
         }
 
-        set((state) => ({
-          cartItems: state.cartItems.map((item) =>
-            item.id === id ? { ...item, quantity } : item,
-          ),
-        }));
+        set((state) => {
+          const target = state.cartItems.find((item) => item.id === id);
+          const nextState = {
+            cartItems: state.cartItems.map((item) =>
+              item.id === id ? { ...item, quantity } : item,
+            ),
+          };
+
+          void (async () => {
+            if (
+              !(await hasRemoteSession(get().isAuthenticated)) ||
+              !target?.backendItemId ||
+              target.type === "custom"
+            ) {
+              return;
+            }
+
+            try {
+              const remoteCart = await cartService.updateCartItem(target.backendItemId, {
+                quantity,
+              });
+
+              set((currentState) => ({
+                cartItems: mergeRemoteCartWithLocal(remoteCart.items, currentState.cartItems),
+              }));
+            } catch {
+              // Keep optimistic quantity if remote update fails.
+            }
+          })();
+
+          return nextState;
+        });
       },
-      clearCart: () => set({ cartItems: [], appliedVoucher: null, customBoxDraft: null }),
+      clearCart: () => {
+        void (async () => {
+          if (!(await hasRemoteSession(get().isAuthenticated))) {
+            return;
+          }
+
+          try {
+            await cartService.clearCart();
+          } catch {
+            // Ignore remote clear errors and still clear local cart.
+          }
+        })();
+
+        set({ cartItems: [], appliedVoucher: null, customBoxDraft: null });
+      },
       applyVoucher: (voucher) => set({ appliedVoucher: voucher }),
       toggleWishlist: (productId) =>
         set((state) => ({
@@ -184,7 +296,7 @@ export const useAppStore = create<AppState>()(
             item.id === notificationId ? { ...item, isRead: true } : item,
           ),
         })),
-      placeOrder: () => {
+      placeOrder: async () => {
         const state = get();
         const draft = state.checkoutDraft;
         if (!draft || state.cartItems.length === 0) {
@@ -192,13 +304,85 @@ export const useAppStore = create<AppState>()(
         }
 
         const summary = state.getCartSummary();
-        const address =
-          state.addresses.find((item) => item.id === draft.addressId) ??
-          state.addresses.find((item) => item.isDefault) ??
-          state.addresses[0];
-
-        if (!address) {
+        if (
+          !draft.fullName.trim() ||
+          !draft.phone.trim() ||
+          !draft.address.trim() ||
+          !draft.ward.trim() ||
+          !draft.district.trim() ||
+          !draft.city.trim()
+        ) {
           return null;
+        }
+
+        const shippingAddress = [draft.address, draft.ward, draft.district, draft.city]
+          .filter(Boolean)
+          .join(", ");
+        const address: Address = {
+          id: `checkout-${Date.now()}`,
+          label: "Giao hang",
+          fullName: draft.fullName.trim(),
+          phone: draft.phone.trim(),
+          address: draft.address.trim(),
+          ward: draft.ward.trim(),
+          district: draft.district.trim(),
+          city: draft.city.trim(),
+          isDefault: false,
+        };
+
+        const canUseRemoteCheckout =
+          (await hasRemoteSession(state.isAuthenticated)) &&
+          state.cartItems.every((item) => item.type !== "custom");
+
+        if (canUseRemoteCheckout) {
+          try {
+            const selectedRemoteItemIds = state.cartItems
+              .map((item) => item.backendItemId)
+              .filter((itemId): itemId is string => Boolean(itemId));
+
+            const remoteOrder = await cartService.checkout({
+              shippingAddress,
+              shippingPhone: address.phone,
+              paymentMethod: mapPaymentMethodToApi(draft.paymentMethod),
+              voucherCode: state.appliedVoucher?.code ?? null,
+              note: draft.note || null,
+              selectedItemIds: selectedRemoteItemIds.length > 0 ? selectedRemoteItemIds : null,
+            });
+
+            const mappedOrder = mapOrder(
+              remoteOrder,
+              undefined,
+              undefined,
+              state.user ?? undefined,
+            );
+
+            const orderWithLocalItems: Order = {
+              ...mappedOrder,
+              items: state.cartItems.map((item) => ({
+                productId: item.productId,
+                name: item.name,
+                image: item.image,
+                price: item.price,
+                quantity: item.quantity,
+              })),
+              address: {
+                ...mappedOrder.address,
+                ...address,
+              },
+            };
+
+            set({
+              orders: [orderWithLocalItems, ...state.orders.filter((item) => item.id !== orderWithLocalItems.id)],
+              cartItems: [],
+              appliedVoucher: null,
+              checkoutDraft: null,
+              customBoxDraft: null,
+            });
+
+            return orderWithLocalItems;
+          } catch {
+            return null;
+          }
         }
 
         const order: Order = {

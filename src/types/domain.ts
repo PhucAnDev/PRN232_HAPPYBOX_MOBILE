@@ -86,6 +86,7 @@ export interface OrderTimelineItem {
 
 export interface Order {
   id: string;
+  backendId?: string;
   status: OrderStatus;
   items: OrderItem[];
   subtotal: number;
@@ -104,6 +105,10 @@ export interface UserProfile {
   fullName: string;
   email: string;
   phone: string;
+  username?: string;
+  address?: string;
+  roleName?: string;
+  createdAt?: string;
   avatar?: string;
   joinDate: string;
 }
@@ -126,6 +131,7 @@ export interface AppNotification {
 
 export interface CartItem {
   id: string;
+  backendItemId?: string;
   productId: string;
   name: string;
   image: string;
@@ -151,7 +157,12 @@ export interface CartSummary {
 }
 
 export interface CheckoutDraft {
-  addressId: string;
+  fullName: string;
+  phone: string;
+  address: string;
+  ward: string;
+  district: string;
+  city: string;
   paymentMethod: PaymentMethodId;
   note: string;
 }

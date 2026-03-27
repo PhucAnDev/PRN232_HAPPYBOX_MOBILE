@@ -1,7 +1,8 @@
 import { MaterialIcons } from "@expo/vector-icons";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useMemo, useState } from "react";
+import React from "react";
 import {
   Image,
   Pressable,
@@ -13,11 +14,12 @@ import {
 } from "react-native";
 import Toast from "react-native-toast-message";
 import { useNavigation } from "@react-navigation/native";
-import { AddressCard } from "../../../components/cards/AddressCard";
 import { VoucherCard } from "../../../components/cards/VoucherCard";
 import { AppScreen, EmptyState, SheetModal } from "../../../components/common/Primitives";
 import { AppHeader } from "../../../components/navigation/AppHeader";
 import { paymentMethods } from "../../../constants/content";
+import { USE_MOCK_API } from "../../../constants/env";
+import cartService from "../../../services/cartService";
 import { api } from "../../../services/mockApi";
 import { useAppStore } from "../../../store/useAppStore";
 import { PaymentMethodId, Voucher } from "../../../types/domain";
@@ -26,8 +28,11 @@ import { formatPrice } from "../../../utils/format";
 
 export function CartScreen() {
   const navigation = useNavigation<any>();
+  const user = useAppStore((state) => state.user);
+  const isAuthenticated = useAppStore((state) => state.isAuthenticated);
   const cartItems = useAppStore((state) => state.cartItems);
   const appliedVoucher = useAppStore((state) => state.appliedVoucher);
+  const hydrateCartItems = useAppStore((state) => state.hydrateCartItems);
   const updateCartQuantity = useAppStore((state) => state.updateCartQuantity);
   const removeFromCart = useAppStore((state) => state.removeFromCart);
   const clearCart = useAppStore((state) => state.clearCart);
@@ -39,6 +44,34 @@ export function CartScreen() {
     queryKey: ["vouchers"],
     queryFn: api.vouchers.list,
   });
+  const remoteCartQuery = useQuery({
+    queryKey: ["cart", user?.id],
+    queryFn: cartService.getCart,
+    enabled: Boolean(user?.id && isAuthenticated && !USE_MOCK_API),
+  });
+
+  useEffect(() => {
+    if (!remoteCartQuery.data) {
+      return;
+    }
+
+    hydrateCartItems(
+      remoteCartQuery.data.items.map((item) => ({
+        id: item.id,
+        backendItemId: item.id,
+        productId: item.giftBoxId ?? item.productId ?? item.id,
+        name: item.displayName ?? item.giftBoxName ?? item.productName ?? "Sản phẩm",
+        image:
+          item.displayImageUrl ??
+          item.giftBoxImageUrl ??
+          item.productImageUrl ??
+          "",
+        price: item.unitPrice,
+        quantity: item.quantity,
+        type: item.giftBoxId ? "giftbox" : "product",
+      })),
+    );
+  }, [hydrateCartItems, remoteCartQuery.data]);
 
   const summary = getCartSummary();
 
@@ -266,15 +299,23 @@ function SummaryRow({
 
 export function CheckoutScreen() {
   const navigation = useNavigation<any>();
-  const addresses = useAppStore((state) => state.addresses);
+  const user = useAppStore((state) => state.user);
+  const storeAddresses = useAppStore((state) => state.addresses);
   const cartItems = useAppStore((state) => state.cartItems);
   const appliedVoucher = useAppStore((state) => state.appliedVoucher);
   const applyVoucher = useAppStore((state) => state.applyVoucher);
   const getCartSummary = useAppStore((state) => state.getCartSummary);
   const setCheckoutDraft = useAppStore((state) => state.setCheckoutDraft);
-  const [selectedAddressId, setSelectedAddressId] = useState(
-    addresses.find((item) => item.isDefault)?.id ?? addresses[0]?.id ?? "",
+  const defaultAddress =
+    storeAddresses.find((item) => item.isDefault) ?? storeAddresses[0] ?? null;
+  const [fullName, setFullName] = useState(
+    user?.fullName ?? defaultAddress?.fullName ?? "",
   );
+  const [phone, setPhone] = useState(user?.phone ?? defaultAddress?.phone ?? "");
+  const [city, setCity] = useState(defaultAddress?.city ?? "");
+  const [district, setDistrict] = useState(defaultAddress?.district ?? "");
+  const [ward, setWard] = useState(defaultAddress?.ward ?? "");
+  const [streetAddress, setStreetAddress] = useState(defaultAddress?.address ?? "");
   const [selectedPayment, setSelectedPayment] = useState<PaymentMethodId>("cod");
   const [note, setNote] = useState("");
   const [showVoucherSheet, setShowVoucherSheet] = useState(false);
@@ -284,11 +325,43 @@ export function CheckoutScreen() {
     queryFn: api.vouchers.list,
   });
 
+  useEffect(() => {
+    if (!fullName.trim() && (user?.fullName || defaultAddress?.fullName)) {
+      setFullName(user?.fullName ?? defaultAddress?.fullName ?? "");
+    }
+    if (!phone.trim() && (user?.phone || defaultAddress?.phone)) {
+      setPhone(user?.phone ?? defaultAddress?.phone ?? "");
+    }
+    if (!city.trim() && defaultAddress?.city) {
+      setCity(defaultAddress.city);
+    }
+    if (!district.trim() && defaultAddress?.district) {
+      setDistrict(defaultAddress.district);
+    }
+    if (!ward.trim() && defaultAddress?.ward) {
+      setWard(defaultAddress.ward);
+    }
+    if (!streetAddress.trim() && defaultAddress?.address) {
+      setStreetAddress(defaultAddress.address);
+    }
+  }, [
+    city,
+    defaultAddress?.address,
+    defaultAddress?.city,
+    defaultAddress?.district,
+    defaultAddress?.fullName,
+    defaultAddress?.phone,
+    defaultAddress?.ward,
+    district,
+    fullName,
+    phone,
+    streetAddress,
+    user?.fullName,
+    user?.phone,
+    ward,
+  ]);
+
   const summary = getCartSummary();
-  const selectedAddress = useMemo(
-    () => addresses.find((item) => item.id === selectedAddressId) ?? null,
-    [addresses, selectedAddressId],
-  );
 
   if (cartItems.length === 0) {
     return (
@@ -310,50 +383,54 @@ export function CheckoutScreen() {
       <AppHeader title="Thanh Toán" onBack={() => navigation.goBack()} />
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.screenSection}>
-          <Text style={styles.blockTitle}>ĐỊA CHỈ GIAO HÀNG</Text>
-          {selectedAddress ? (
-            <AddressCard
-              address={selectedAddress}
-              selected
-              onPress={() => undefined}
-              onEdit={() => navigation.navigate("AddressList")}
+          <Text style={styles.blockTitle}>THONG TIN GIAO HANG</Text>
+          <View style={styles.formCard}>
+            <View style={styles.formGrid}>
+              <CheckoutField
+                label="Ho va ten"
+                placeholder="Nhap ho ten nguoi nhan"
+                value={fullName}
+                onChangeText={setFullName}
+              />
+              <CheckoutField
+                label="So dien thoai"
+                keyboardType="phone-pad"
+                placeholder="Nhap so dien thoai"
+                value={phone}
+                onChangeText={setPhone}
+              />
+            </View>
+
+            <View style={styles.formGrid}>
+              <CheckoutField
+                label="Tinh / Thanh pho"
+                placeholder="VD: TP HCM"
+                value={city}
+                onChangeText={setCity}
+              />
+              <CheckoutField
+                label="Quan / Huyen"
+                placeholder="VD: Quan 1"
+                value={district}
+                onChangeText={setDistrict}
+              />
+            </View>
+
+            <CheckoutField
+              label="Phuong / Xa"
+              placeholder="VD: Ben Nghe"
+              value={ward}
+              onChangeText={setWard}
             />
-          ) : (
-            <Pressable
-              onPress={() => navigation.navigate("AddressForm")}
-              style={styles.addAddressCard}
-            >
-              <MaterialIcons color={colors.gold} name="add" size={18} />
-              <Text style={styles.addAddressText}>Thêm địa chỉ giao hàng</Text>
-            </Pressable>
-          )}
-          {addresses.length > 1 ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.addressSelectorRow}
-            >
-              {addresses.map((address) => (
-                <Pressable
-                  key={address.id}
-                  onPress={() => setSelectedAddressId(address.id)}
-                  style={[
-                    styles.addressChip,
-                    selectedAddressId === address.id && styles.addressChipActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.addressChipText,
-                      selectedAddressId === address.id && styles.addressChipTextActive,
-                    ]}
-                  >
-                    {address.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-          ) : null}
+
+            <CheckoutField
+              label="Dia chi chi tiet"
+              multiline
+              placeholder="So nha, ten duong, toa nha..."
+              value={streetAddress}
+              onChangeText={setStreetAddress}
+            />
+          </View>
         </View>
 
         <View style={styles.screenSection}>
@@ -490,16 +567,37 @@ export function CheckoutScreen() {
       <View style={styles.footerShell}>
         <Pressable
           onPress={() => {
-            if (!selectedAddressId) {
+            if (!fullName.trim()) {
               Toast.show({
                 type: "error",
-                text1: "Vui lòng chọn địa chỉ giao hàng",
+                text1: "Vui long nhap ho ten nguoi nhan",
+              });
+              return;
+            }
+
+            if (!phone.trim()) {
+              Toast.show({
+                type: "error",
+                text1: "Vui long nhap so dien thoai giao hang",
+              });
+              return;
+            }
+
+            if (!city.trim() || !district.trim() || !ward.trim() || !streetAddress.trim()) {
+              Toast.show({
+                type: "error",
+                text1: "Vui long nhap day du dia chi giao hang",
               });
               return;
             }
 
             setCheckoutDraft({
-              addressId: selectedAddressId,
+              fullName: fullName.trim(),
+              phone: phone.trim(),
+              address: streetAddress.trim(),
+              ward: ward.trim(),
+              district: district.trim(),
+              city: city.trim(),
               paymentMethod: selectedPayment,
               note,
             });
@@ -530,6 +628,29 @@ export function CheckoutScreen() {
         }}
       />
     </AppScreen>
+  );
+}
+
+function CheckoutField({
+  label,
+  multiline,
+  ...props
+}: React.ComponentProps<typeof TextInput> & {
+  label: string;
+  multiline?: boolean;
+}) {
+  return (
+    <View style={styles.inputBlock}>
+      <Text style={styles.inputLabel}>{label}</Text>
+      <View style={[styles.inputShell, multiline ? styles.inputShellMultiline : undefined]}>
+        <TextInput
+          {...props}
+          multiline={multiline}
+          placeholderTextColor={colors.textMuted}
+          style={[styles.inputControl, multiline ? styles.inputControlMultiline : undefined]}
+        />
+      </View>
+    </View>
   );
 }
 
@@ -763,46 +884,49 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginBottom: spacing.sm,
   },
-  addAddressCard: {
-    minHeight: 56,
+  formCard: {
+    backgroundColor: colors.white,
     borderRadius: radius.lg,
-    borderWidth: 1.5,
-    borderStyle: "dashed",
-    borderColor: colors.gold,
-    backgroundColor: colors.white,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-  },
-  addAddressText: {
-    fontSize: typography.body,
-    fontWeight: "700",
-    color: colors.gold,
-  },
-  addressSelectorRow: {
-    gap: spacing.sm,
-    paddingTop: spacing.sm,
-  },
-  addressChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: radius.full,
-    backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.border,
+    padding: spacing.base,
+    gap: spacing.sm,
+    ...shadows.card,
   },
-  addressChipActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+  formGrid: {
+    flexDirection: "row",
+    gap: spacing.sm,
   },
-  addressChipText: {
+  inputBlock: {
+    flex: 1,
+    gap: 6,
+  },
+  inputLabel: {
     fontSize: typography.caption,
     fontWeight: "700",
-    color: colors.textSoft,
+    color: colors.text,
   },
-  addressChipTextActive: {
-    color: colors.white,
+  inputShell: {
+    minHeight: 48,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 14,
+    justifyContent: "center",
+  },
+  inputShellMultiline: {
+    minHeight: 88,
+    paddingVertical: 12,
+  },
+  inputControl: {
+    fontSize: typography.body,
+    color: colors.text,
+    paddingVertical: 0,
+  },
+  inputControlMultiline: {
+    minHeight: 60,
+    textAlignVertical: "top",
   },
   orderSummaryCard: {
     backgroundColor: colors.white,
