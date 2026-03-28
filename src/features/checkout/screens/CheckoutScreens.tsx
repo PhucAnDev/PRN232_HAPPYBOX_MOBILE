@@ -1,7 +1,7 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Image,
   Pressable,
@@ -20,13 +20,68 @@ import { AppHeader } from "../../../components/navigation/AppHeader";
 import { paymentMethods } from "../../../constants/content";
 import { api } from "../../../services/mockApi";
 import { useAppStore } from "../../../store/useAppStore";
-import { PaymentMethodId, Voucher } from "../../../types/domain";
+import { CartItem, PaymentMethodId, Voucher } from "../../../types/domain";
 import { colors, radius, shadows, spacing, typography } from "../../../theme/tokens";
 import { formatPrice } from "../../../utils/format";
 
+const guidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const isGuid = (value: string | undefined | null): value is string => {
+  if (!value) return false;
+  return guidPattern.test(value);
+};
+
+const isLocalOnlyCartItem = (item: CartItem) =>
+  item.type === "custom" ||
+  item.id.startsWith("cart-") ||
+  (!item.backendProductId && !item.backendGiftBoxId && !isGuid(item.productId));
+
+const getCartItemSyncKey = (item: CartItem) => {
+  if (item.type === "product") {
+    return `product:${item.backendProductId ?? item.productId}`;
+  }
+
+  if (item.type === "giftbox") {
+    return `giftbox:${item.backendGiftBoxId ?? item.productId}`;
+  }
+
+  return `custom:${item.id}`;
+};
+
+const mergeRemoteCartWithLocalFallback = (remoteItems: CartItem[], localItems: CartItem[]) => {
+  if (remoteItems.length === 0) {
+    return localItems.filter(isLocalOnlyCartItem);
+  }
+
+  const remoteKeys = new Set(remoteItems.map(getCartItemSyncKey));
+  const localFallback = localItems.filter(
+    (item) => isLocalOnlyCartItem(item) && !remoteKeys.has(getCartItemSyncKey(item)),
+  );
+
+  return [...remoteItems, ...localFallback];
+};
+
+const isSameCart = (nextItems: CartItem[], currentItems: CartItem[]) => {
+  if (nextItems.length !== currentItems.length) return false;
+  return nextItems.every((item, index) => {
+    const current = currentItems[index];
+    if (!current) return false;
+    return (
+      item.id === current.id &&
+      item.quantity === current.quantity &&
+      item.price === current.price &&
+      item.type === current.type &&
+      item.productId === current.productId
+    );
+  });
+};
+
 export function CartScreen() {
   const navigation = useNavigation<any>();
+  const isAuthenticated = useAppStore((state) => state.isAuthenticated);
   const cartItems = useAppStore((state) => state.cartItems);
+  const setCartItems = useAppStore((state) => state.setCartItems);
   const appliedVoucher = useAppStore((state) => state.appliedVoucher);
   const updateCartQuantity = useAppStore((state) => state.updateCartQuantity);
   const removeFromCart = useAppStore((state) => state.removeFromCart);
@@ -34,11 +89,38 @@ export function CartScreen() {
   const applyVoucher = useAppStore((state) => state.applyVoucher);
   const getCartSummary = useAppStore((state) => state.getCartSummary);
   const [showVoucherSheet, setShowVoucherSheet] = useState(false);
+  const [isClearingCart, setIsClearingCart] = useState(false);
+  const [pendingItemIds, setPendingItemIds] = useState<string[]>([]);
+
+  const cartQuery = useQuery({
+    queryKey: ["cart"],
+    queryFn: api.cart.get,
+    enabled: isAuthenticated,
+  });
 
   const vouchersQuery = useQuery({
     queryKey: ["vouchers"],
     queryFn: api.vouchers.list,
   });
+
+  useEffect(() => {
+    if (!cartQuery.data) return;
+    const currentItems = useAppStore.getState().cartItems;
+    const mergedItems = mergeRemoteCartWithLocalFallback(cartQuery.data, currentItems);
+    if (isSameCart(mergedItems, currentItems)) return;
+    setCartItems(mergedItems);
+  }, [cartQuery.data, setCartItems]);
+
+  const runItemAction = async (itemId: string, action: () => Promise<boolean>) => {
+    setPendingItemIds((current) =>
+      current.includes(itemId) ? current : [...current, itemId],
+    );
+    try {
+      return await action();
+    } finally {
+      setPendingItemIds((current) => current.filter((id) => id !== itemId));
+    }
+  };
 
   const summary = getCartSummary();
 
@@ -63,9 +145,22 @@ export function CartScreen() {
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.cartActionRow}>
           <Pressable
+            disabled={isClearingCart}
             onPress={() => {
-              clearCart();
-              Toast.show({ type: "success", text1: "Đã xóa toàn bộ giỏ hàng" });
+              if (isClearingCart) return;
+              setIsClearingCart(true);
+              void clearCart()
+                .then((isSuccess) => {
+                  Toast.show({
+                    type: isSuccess ? "success" : "error",
+                    text1: isSuccess
+                      ? "Đã xóa toàn bộ giỏ hàng"
+                      : "Không thể xóa giỏ hàng. Vui lòng thử lại.",
+                  });
+                })
+                .finally(() => {
+                  setIsClearingCart(false);
+                });
             }}
           >
             <Text style={styles.clearAllText}>Xóa tất cả</Text>
@@ -87,7 +182,20 @@ export function CartScreen() {
                   <Text style={styles.cartItemPrice}>{formatPrice(item.price)}</Text>
                   <View style={styles.qtyRow}>
                     <Pressable
-                      onPress={() => updateCartQuantity(item.id, item.quantity - 1)}
+                      disabled={isClearingCart || pendingItemIds.includes(item.id)}
+                      onPress={() => {
+                        if (isClearingCart || pendingItemIds.includes(item.id)) return;
+                        void runItemAction(item.id, () =>
+                          updateCartQuantity(item.id, item.quantity - 1),
+                        ).then((isSuccess) => {
+                          if (!isSuccess) {
+                            Toast.show({
+                              type: "error",
+                              text1: "Không thể cập nhật số lượng",
+                            });
+                          }
+                        });
+                      }}
                       style={styles.qtySecondary}
                     >
                       <MaterialIcons
@@ -98,7 +206,20 @@ export function CartScreen() {
                     </Pressable>
                     <Text style={styles.qtyValue}>{item.quantity}</Text>
                     <Pressable
-                      onPress={() => updateCartQuantity(item.id, item.quantity + 1)}
+                      disabled={isClearingCart || pendingItemIds.includes(item.id)}
+                      onPress={() => {
+                        if (isClearingCart || pendingItemIds.includes(item.id)) return;
+                        void runItemAction(item.id, () =>
+                          updateCartQuantity(item.id, item.quantity + 1),
+                        ).then((isSuccess) => {
+                          if (!isSuccess) {
+                            Toast.show({
+                              type: "error",
+                              text1: "Không thể cập nhật số lượng",
+                            });
+                          }
+                        });
+                      }}
                       style={styles.qtyPrimary}
                     >
                       <MaterialIcons color={colors.white} name="add" size={14} />
@@ -107,7 +228,18 @@ export function CartScreen() {
                 </View>
               </View>
               <Pressable
-                onPress={() => removeFromCart(item.id)}
+                disabled={isClearingCart || pendingItemIds.includes(item.id)}
+                onPress={() => {
+                  if (isClearingCart || pendingItemIds.includes(item.id)) return;
+                  void runItemAction(item.id, () => removeFromCart(item.id)).then((isSuccess) => {
+                    if (!isSuccess) {
+                      Toast.show({
+                        type: "error",
+                        text1: "Không thể xóa sản phẩm khỏi giỏ",
+                      });
+                    }
+                  });
+                }}
                 style={styles.cartRemoveButton}
               >
                 <MaterialIcons color={colors.error} name="close" size={14} />
@@ -159,9 +291,9 @@ export function CartScreen() {
               value={summary.shipping === 0 ? "Miễn phí" : formatPrice(summary.shipping)}
               color={summary.shipping === 0 ? colors.olive : colors.text}
             />
-            {summary.subtotal < 1500000 ? (
+            {summary.subtotal < 500000 ? (
               <Text style={styles.summaryHint}>
-                Thêm {formatPrice(1500000 - summary.subtotal)} để được miễn phí giao hàng
+                Thêm {formatPrice(500000 - summary.subtotal)} để được miễn phí giao hàng
               </Text>
             ) : null}
             <SummaryRow label="Tổng cộng" value={formatPrice(summary.total)} strong />
@@ -173,7 +305,17 @@ export function CartScreen() {
 
       <View style={styles.footerShell}>
         <Pressable
-          onPress={() => navigation.navigate("Checkout")}
+          onPress={() => {
+            if (!isAuthenticated) {
+              Toast.show({
+                type: "info",
+                text1: "Vui lòng đăng nhập để tiếp tục thanh toán",
+              });
+              navigation.navigate("SignIn");
+              return;
+            }
+            navigation.navigate("Checkout");
+          }}
           style={styles.primaryFooterWrap}
         >
           <LinearGradient
@@ -266,8 +408,10 @@ function SummaryRow({
 
 export function CheckoutScreen() {
   const navigation = useNavigation<any>();
+  const isAuthenticated = useAppStore((state) => state.isAuthenticated);
   const addresses = useAppStore((state) => state.addresses);
   const cartItems = useAppStore((state) => state.cartItems);
+  const setCartItems = useAppStore((state) => state.setCartItems);
   const appliedVoucher = useAppStore((state) => state.appliedVoucher);
   const applyVoucher = useAppStore((state) => state.applyVoucher);
   const getCartSummary = useAppStore((state) => state.getCartSummary);
@@ -279,10 +423,24 @@ export function CheckoutScreen() {
   const [note, setNote] = useState("");
   const [showVoucherSheet, setShowVoucherSheet] = useState(false);
 
+  const cartQuery = useQuery({
+    queryKey: ["cart"],
+    queryFn: api.cart.get,
+    enabled: isAuthenticated,
+  });
+
   const vouchersQuery = useQuery({
     queryKey: ["vouchers"],
     queryFn: api.vouchers.list,
   });
+
+  useEffect(() => {
+    if (!cartQuery.data) return;
+    const currentItems = useAppStore.getState().cartItems;
+    const mergedItems = mergeRemoteCartWithLocalFallback(cartQuery.data, currentItems);
+    if (isSameCart(mergedItems, currentItems)) return;
+    setCartItems(mergedItems);
+  }, [cartQuery.data, setCartItems]);
 
   const summary = getCartSummary();
   const selectedAddress = useMemo(
@@ -490,6 +648,15 @@ export function CheckoutScreen() {
       <View style={styles.footerShell}>
         <Pressable
           onPress={() => {
+            if (!isAuthenticated) {
+              Toast.show({
+                type: "info",
+                text1: "Vui lòng đăng nhập để đặt hàng",
+              });
+              navigation.navigate("SignIn");
+              return;
+            }
+
             if (!selectedAddressId) {
               Toast.show({
                 type: "error",

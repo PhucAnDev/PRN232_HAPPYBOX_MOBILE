@@ -10,6 +10,11 @@ export type VoucherDiscountType = "percent" | "fixed";
 export type CartItemType = "product" | "giftbox" | "custom";
 export type ChatRole = "user" | "bot";
 
+export interface AuthTokens {
+  accessToken: string;
+  refreshToken: string;
+}
+
 export interface Category {
   id: string;
   name: string;
@@ -86,6 +91,7 @@ export interface OrderTimelineItem {
 
 export interface Order {
   id: string;
+  orderNumber?: string;
   status: OrderStatus;
   items: OrderItem[];
   subtotal: number;
@@ -101,9 +107,13 @@ export interface Order {
 
 export interface UserProfile {
   id: string;
+  username?: string;
   fullName: string;
   email: string;
   phone: string;
+  address?: string;
+  roleName?: string;
+  isActive?: boolean;
   avatar?: string;
   joinDate: string;
 }
@@ -120,6 +130,8 @@ export interface AppNotification {
   title: string;
   body: string;
   kind: "promo" | "order" | "voucher" | "info";
+  orderId?: string;
+  orderStatus?: OrderStatus;
   createdAt: string;
   isRead: boolean;
 }
@@ -127,6 +139,8 @@ export interface AppNotification {
 export interface CartItem {
   id: string;
   productId: string;
+  backendProductId?: string;
+  backendGiftBoxId?: string;
   name: string;
   image: string;
   price: number;

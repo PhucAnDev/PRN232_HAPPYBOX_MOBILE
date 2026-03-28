@@ -50,11 +50,6 @@ const slides = [
   },
 ];
 
-const mockSignIn = {
-  email: "lan.nguyen@gmail.com",
-  password: "123456",
-};
-
 const signInSchema = z.object({
   email: z.email("Email không hợp lệ"),
   password: z.string().min(6, "Mật khẩu tối thiểu 6 ký tự"),
@@ -77,18 +72,32 @@ const forgotSchema = z.object({
   email: z.email("Email không hợp lệ"),
 });
 
+const resetPasswordSchema = z
+  .object({
+    email: z.email("Email không hợp lệ"),
+    otp: z.string().length(6, "OTP phải gồm đúng 6 ký tự"),
+    newPassword: z.string().min(6, "Mật khẩu tối thiểu 6 ký tự"),
+    confirmPassword: z.string().min(6, "Nhập lại mật khẩu"),
+  })
+  .refine((values) => values.newPassword === values.confirmPassword, {
+    path: ["confirmPassword"],
+    message: "Mật khẩu xác nhận không khớp",
+  });
+
 type SignInValues = z.infer<typeof signInSchema>;
 type SignUpValues = z.infer<typeof signUpSchema>;
 type ForgotValues = z.infer<typeof forgotSchema>;
+type ResetPasswordValues = z.infer<typeof resetPasswordSchema>;
 
 export function SplashScreen() {
   const navigation = useNavigation<any>();
   const onboardingDone = useAppStore((state) => state.onboardingDone);
   const isAuthenticated = useAppStore((state) => state.isAuthenticated);
+  const authTokens = useAppStore((state) => state.authTokens);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (isAuthenticated) {
+      if (isAuthenticated && authTokens?.accessToken) {
         navigation.replace("MainTabs");
       } else if (onboardingDone) {
         navigation.replace("SignIn");
@@ -98,7 +107,7 @@ export function SplashScreen() {
     }, 2200);
 
     return () => clearTimeout(timer);
-  }, [isAuthenticated, navigation, onboardingDone]);
+  }, [authTokens?.accessToken, isAuthenticated, navigation, onboardingDone]);
 
   return (
     <LinearGradient
@@ -229,15 +238,18 @@ export function SignInScreen() {
   const [secure, setSecure] = useState(true);
   const { control, handleSubmit, formState } = useForm<SignInValues>({
     resolver: zodResolver(signInSchema),
-    defaultValues: mockSignIn,
+    defaultValues: {
+      email: "",
+      password: "",
+    },
     mode: "onChange",
   });
 
   const mutation = useMutation({
     mutationFn: (payload: SignInValues) =>
       api.auth.signIn(payload.email, payload.password),
-    onSuccess: (user) => {
-      login(user);
+    onSuccess: ({ user, tokens }) => {
+      login(user, tokens);
       Toast.show({
         type: "success",
         text1: "Đăng nhập thành công",
@@ -245,11 +257,15 @@ export function SignInScreen() {
       });
       navigation.reset({ index: 0, routes: [{ name: "MainTabs" }] });
     },
-    onError: () => {
+    onError: (error) => {
+      const message = api.errors.getMessage(
+        error,
+        "Vui lòng kiểm tra lại email và mật khẩu.",
+      );
       Toast.show({
         type: "error",
         text1: "Đăng nhập thất bại",
-        text2: "Vui lòng kiểm tra lại email và mật khẩu.",
+        text2: message,
       });
     },
   });
@@ -287,7 +303,7 @@ export function SignInScreen() {
           <AuthInput
             label="Mật khẩu"
             icon="lock-outline"
-            placeholder="••••••••"
+            placeholder="Nhập mật khẩu"
             value={field.value}
             onBlur={field.onBlur}
             onChangeText={field.onChange}
@@ -374,15 +390,23 @@ export function SignUpScreen() {
         fullName: payload.fullName,
         email: payload.email,
         phone: payload.phone,
+        password: payload.password,
       }),
-    onSuccess: (user) => {
-      signup(user);
+    onSuccess: ({ user, tokens }) => {
+      signup(user, tokens);
       Toast.show({
         type: "success",
         text1: "Tạo tài khoản thành công",
         text2: "Chào mừng bạn đến với GiftBox.",
       });
       navigation.reset({ index: 0, routes: [{ name: "MainTabs" }] });
+    },
+    onError: (error) => {
+      Toast.show({
+        type: "error",
+        text1: "Đăng ký thất bại",
+        text2: api.errors.getMessage(error, "Không thể tạo tài khoản."),
+      });
     },
   });
 
@@ -449,7 +473,7 @@ export function SignUpScreen() {
           <AuthInput
             label="Mật khẩu"
             icon="lock-outline"
-            placeholder="••••••••"
+            placeholder="Nhập mật khẩu"
             value={field.value}
             onBlur={field.onBlur}
             onChangeText={field.onChange}
@@ -475,7 +499,7 @@ export function SignUpScreen() {
           <AuthInput
             label="Xác nhận mật khẩu"
             icon="lock-outline"
-            placeholder="••••••••"
+            placeholder="Nhập lại mật khẩu"
             value={field.value}
             onBlur={field.onBlur}
             onChangeText={field.onChange}
@@ -514,36 +538,103 @@ export function SignUpScreen() {
 export function ForgotPasswordScreen() {
   const navigation = useNavigation<any>();
   const [sentEmail, setSentEmail] = useState("");
-  const { control, handleSubmit, formState, reset } = useForm<ForgotValues>({
+  const {
+    control: forgotControl,
+    handleSubmit: submitForgot,
+    formState: forgotFormState,
+    reset: resetForgotForm,
+  } = useForm<ForgotValues>({
     resolver: zodResolver(forgotSchema),
     defaultValues: { email: "" },
     mode: "onChange",
   });
 
-  const mutation = useMutation({
+  const {
+    control: resetControl,
+    handleSubmit: submitReset,
+    formState: resetFormState,
+    watch: watchReset,
+    reset: resetResetForm,
+  } = useForm<ResetPasswordValues>({
+    resolver: zodResolver(resetPasswordSchema),
+    defaultValues: {
+      email: "",
+      otp: "",
+      newPassword: "",
+      confirmPassword: "",
+    },
+    mode: "onChange",
+  });
+
+  const forgotMutation = useMutation({
     mutationFn: (payload: ForgotValues) => api.auth.forgotPassword(payload.email),
     onSuccess: (_data, payload) => {
       setSentEmail(payload.email);
-      reset({ email: "" });
+      resetForgotForm({ email: "" });
+      resetResetForm({
+        email: payload.email,
+        otp: "",
+        newPassword: "",
+        confirmPassword: "",
+      });
       Toast.show({
         type: "success",
         text1: "Đã gửi email khôi phục",
         text2: "Vui lòng kiểm tra hộp thư của bạn.",
       });
     },
+    onError: (error) => {
+      Toast.show({
+        type: "error",
+        text1: "Không gửi được email",
+        text2: api.errors.getMessage(error, "Vui lòng thử lại."),
+      });
+    },
   });
+
+  const resetMutation = useMutation({
+    mutationFn: (payload: ResetPasswordValues) => api.auth.resetPassword(payload),
+    onSuccess: () => {
+      Toast.show({
+        type: "success",
+        text1: "Đặt lại mật khẩu thành công",
+        text2: "Bạn có thể đăng nhập lại với mật khẩu mới.",
+      });
+      setSentEmail("");
+      resetResetForm({
+        email: "",
+        otp: "",
+        newPassword: "",
+        confirmPassword: "",
+      });
+      navigation.reset({ index: 0, routes: [{ name: "SignIn" }] });
+    },
+    onError: (error) => {
+      Toast.show({
+        type: "error",
+        text1: "Đặt lại mật khẩu thất bại",
+        text2: api.errors.getMessage(error, "Vui lòng kiểm tra lại OTP và thử lại."),
+      });
+    },
+  });
+
+  const resetEmail = watchReset("email");
 
   return (
     <AuthLayout
       backLabel="← Quay lại"
-      title="Quên Mật Khẩu"
-      subtitle="Nhập email để nhận hướng dẫn đặt lại mật khẩu."
+      title={sentEmail ? "Đặt Lại Mật Khẩu" : "Quên Mật Khẩu"}
+      subtitle={
+        sentEmail
+          ? "Nhập OTP đã nhận qua email và tạo mật khẩu mới."
+          : "Nhập email để nhận hướng dẫn đặt lại mật khẩu."
+      }
       onBack={() => navigation.goBack()}
     >
       {!sentEmail ? (
         <>
           <Controller
-            control={control}
+            control={forgotControl}
             name="email"
             render={({ field, fieldState }) => (
               <AuthInput
@@ -561,26 +652,101 @@ export function ForgotPasswordScreen() {
           />
 
           <GradientButton
-            label={mutation.isPending ? "Đang gửi..." : "Gửi Email"}
-            onPress={handleSubmit((values) => mutation.mutate(values))}
-            disabled={mutation.isPending || !formState.isValid}
-            loading={mutation.isPending}
+            label={forgotMutation.isPending ? "Đang gửi..." : "Gửi Email"}
+            onPress={submitForgot((values) => forgotMutation.mutate(values))}
+            disabled={forgotMutation.isPending || !forgotFormState.isValid}
+            loading={forgotMutation.isPending}
           />
         </>
       ) : (
         <View style={styles.sentWrap}>
-          <View style={styles.sentIconWrap}>
-            <Text style={styles.sentIcon}>📧</Text>
-          </View>
-          <Text style={styles.sentTitle}>Email đã được gửi!</Text>
-          <Text style={styles.sentText}>
-            Chúng tôi đã gửi hướng dẫn đặt lại mật khẩu đến{" "}
-            <Text style={styles.sentHighlight}>{sentEmail}</Text>. Vui lòng kiểm tra hộp thư.
-          </Text>
-          <GradientButton
-            label="Về Đăng Nhập"
-            onPress={() => navigation.navigate("SignIn")}
+          <Controller
+            control={resetControl}
+            name="email"
+            render={({ field, fieldState }) => (
+              <AuthInput
+                label="Email"
+                icon="mail-outline"
+                placeholder="your@email.com"
+                value={field.value}
+                onBlur={field.onBlur}
+                onChangeText={field.onChange}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                error={fieldState.error?.message}
+              />
+            )}
           />
+
+          <Controller
+            control={resetControl}
+            name="otp"
+            render={({ field, fieldState }) => (
+              <AuthInput
+                label="Mã OTP"
+                icon="pin-drop"
+                placeholder="Nhập mã gồm 6 ký tự"
+                value={field.value}
+                onBlur={field.onBlur}
+                onChangeText={field.onChange}
+                autoCapitalize="none"
+                error={fieldState.error?.message}
+              />
+            )}
+          />
+
+          <Controller
+            control={resetControl}
+            name="newPassword"
+            render={({ field, fieldState }) => (
+              <AuthInput
+                label="Mật khẩu mới"
+                icon="lock-outline"
+                placeholder="Nhập mật khẩu mới"
+                value={field.value}
+                onBlur={field.onBlur}
+                onChangeText={field.onChange}
+                secureTextEntry
+                autoCapitalize="none"
+                error={fieldState.error?.message}
+              />
+            )}
+          />
+
+          <Controller
+            control={resetControl}
+            name="confirmPassword"
+            render={({ field, fieldState }) => (
+              <AuthInput
+                label="Nhập lại mật khẩu mới"
+                icon="lock-outline"
+                placeholder="Nhập lại mật khẩu mới"
+                value={field.value}
+                onBlur={field.onBlur}
+                onChangeText={field.onChange}
+                secureTextEntry
+                autoCapitalize="none"
+                error={fieldState.error?.message}
+              />
+            )}
+          />
+
+          <GradientButton
+            label={resetMutation.isPending ? "Đang cập nhật..." : "Đặt Lại Mật Khẩu"}
+            onPress={submitReset((values) => resetMutation.mutate(values))}
+            disabled={resetMutation.isPending || !resetFormState.isValid}
+            loading={resetMutation.isPending}
+          />
+
+          <Pressable
+            onPress={() => {
+              if (!resetEmail) return;
+              forgotMutation.mutate({ email: resetEmail });
+            }}
+            style={styles.inlineLinkWrap}
+          >
+            <Text style={styles.inlineLink}>Gửi lại OTP</Text>
+          </Pressable>
         </View>
       )}
     </AuthLayout>

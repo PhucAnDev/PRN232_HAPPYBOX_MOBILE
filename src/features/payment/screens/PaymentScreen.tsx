@@ -1,14 +1,24 @@
-import { MaterialIcons } from "@expo/vector-icons";
+﻿import { MaterialIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
+import Toast from "react-native-toast-message";
 import { AppScreen } from "../../../components/common/Primitives";
+import { api } from "../../../services/mockApi";
 import { useAppStore } from "../../../store/useAppStore";
 import { colors, radius, shadows, spacing, typography } from "../../../theme/tokens";
 import { formatPrice } from "../../../utils/format";
 
-type PaymentState = "processing" | "success" | "failed";
+type PaymentState = "processing" | "success" | "pending" | "failed";
+
+const guidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const isGuid = (value: string | undefined | null): value is string => {
+  if (!value) return false;
+  return guidPattern.test(value);
+};
 
 const paymentLabels: Record<string, string> = {
   cod: "Thanh toán khi nhận hàng",
@@ -20,36 +30,281 @@ const paymentLabels: Record<string, string> = {
 export function PaymentScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
-  const placeOrder = useAppStore((state) => state.placeOrder);
+  const user = useAppStore((state) => state.user);
+  const addresses = useAppStore((state) => state.addresses);
+  const cartItems = useAppStore((state) => state.cartItems);
+  const appliedVoucher = useAppStore((state) => state.appliedVoucher);
+  const checkoutDraft = useAppStore((state) => state.checkoutDraft);
+  const setOrders = useAppStore((state) => state.setOrders);
+  const setCartItems = useAppStore((state) => state.setCartItems);
+  const setCheckoutDraft = useAppStore((state) => state.setCheckoutDraft);
+  const applyVoucher = useAppStore((state) => state.applyVoucher);
+  const addNotification = useAppStore((state) => state.addNotification);
+
   const [state, setState] = useState<PaymentState>("processing");
   const [orderId, setOrderId] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [gatewayStatus, setGatewayStatus] = useState("");
+  const [canOpenOrderDetail, setCanOpenOrderDetail] = useState(false);
+  const [hasProcessed, setHasProcessed] = useState(false);
 
-  const paymentMethod = route.params?.paymentMethod ?? "cod";
+  const paymentMethod = route.params?.paymentMethod ?? checkoutDraft?.paymentMethod ?? "cod";
   const total = route.params?.total ?? 0;
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const success = Math.random() < 0.88;
+    if (hasProcessed) return;
+    setHasProcessed(true);
 
-      if (success) {
-        const order = placeOrder();
-        setOrderId(order?.id ?? "");
-        setState("success");
-      } else {
+    let cancelled = false;
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const processPayment = async () => {
+      if (!user?.id || !checkoutDraft || cartItems.length === 0) {
         setState("failed");
+        setErrorMessage("Không tìm thấy thông tin đơn hàng để thanh toán.");
+        return;
       }
-    }, 2400);
 
-    return () => clearTimeout(timer);
-  }, [placeOrder]);
+      const selectedAddress =
+        addresses.find((item) => item.id === checkoutDraft.addressId) ??
+        addresses.find((item) => item.isDefault) ??
+        null;
+
+      if (!selectedAddress) {
+        setState("failed");
+        setErrorMessage("Vui lòng chọn địa chỉ giao hàng.");
+        return;
+      }
+
+      const shippingAddress = [
+        selectedAddress.address,
+        selectedAddress.ward,
+        selectedAddress.district,
+        selectedAddress.city,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      let payload = api.checkout.createOrderPayload({
+        userId: user.id,
+        paymentMethod,
+        voucherId: appliedVoucher?.id,
+        shippingAddress,
+        shippingPhone: selectedAddress.phone || user.phone || "",
+        note: checkoutDraft.note || "",
+        cartItems,
+      });
+
+      if (payload.orderDetails.length === 0) {
+        try {
+          const remoteCartItems = await api.cart.get();
+          if (remoteCartItems.length > 0) {
+            setCartItems(remoteCartItems);
+            payload = api.checkout.createOrderPayload({
+              userId: user.id,
+              paymentMethod,
+              voucherId: appliedVoucher?.id,
+              shippingAddress,
+              shippingPhone: selectedAddress.phone || user.phone || "",
+              note: checkoutDraft.note || "",
+              cartItems: remoteCartItems,
+            });
+          }
+        } catch {
+          // Keep the original payload and fail gracefully below.
+        }
+      }
+
+      if (payload.orderDetails.length === 0) {
+        setState("failed");
+        setErrorMessage("Giỏ hàng chưa đồng bộ với server. Vui lòng quay lại giỏ hàng và thử lại.");
+        setCanOpenOrderDetail(false);
+        return;
+      }
+
+      try {
+        let createdOrderId = "";
+        let latestGatewayStatus = "";
+        let paymentResult: Extract<PaymentState, "success" | "pending"> = "success";
+        let orderSnapshot: Awaited<ReturnType<typeof api.orders.detail>> = null;
+
+        if (paymentMethod === "momo") {
+          const momoResponse = await api.payment.createOrderAndMomoPayment(payload);
+          createdOrderId = momoResponse.orderId;
+
+          if (!createdOrderId) {
+            throw new Error("Không nhận được mã đơn hàng từ cổng thanh toán MoMo.");
+          }
+
+          if (!momoResponse.payUrl) {
+            throw new Error("Không nhận được liên kết thanh toán MoMo. Vui lòng thử lại.");
+          }
+
+          const canOpenMomo = await Linking.canOpenURL(momoResponse.payUrl).catch(() => false);
+          if (!canOpenMomo) {
+            throw new Error("Không thể mở ứng dụng/đường dẫn thanh toán MoMo.");
+          }
+          await Linking.openURL(momoResponse.payUrl);
+
+          latestGatewayStatus =
+            momoResponse.localPaymentStatus || momoResponse.message || "";
+
+          try {
+            const statusResponse = await api.payment.getMomoOrderStatus(createdOrderId);
+            latestGatewayStatus =
+              statusResponse.localPaymentStatus || statusResponse.message || "";
+
+            const normalizedStatus =
+              `${statusResponse.localPaymentStatus} ${statusResponse.message}`.toLowerCase();
+            const isFailed =
+              normalizedStatus.includes("fail") ||
+              normalizedStatus.includes("cancel") ||
+              normalizedStatus.includes("that bai") ||
+              normalizedStatus.includes("huy");
+            const isPaid =
+              statusResponse.resultCode === 0 ||
+              normalizedStatus.includes("success") ||
+              normalizedStatus.includes("paid") ||
+              normalizedStatus.includes("thanh cong");
+
+            if (isFailed) {
+              throw new Error(
+                statusResponse.message || "Thanh toán MoMo không thành công.",
+              );
+            }
+
+            if (!isPaid) {
+              paymentResult = "pending";
+            }
+          } catch (statusError) {
+            if (statusError instanceof Error) {
+              const message = statusError.message.toLowerCase();
+              if (
+                message.includes("fail") ||
+                message.includes("cancel") ||
+                message.includes("that bai") ||
+                message.includes("huy")
+              ) {
+                throw statusError;
+              }
+            }
+            paymentResult = "pending";
+          }
+
+          for (let retry = 0; retry < 3; retry += 1) {
+            orderSnapshot = await api.orders.detail(createdOrderId);
+            if (orderSnapshot) break;
+            await wait(1200);
+          }
+        } else {
+          const createdOrder = await api.orders.create(payload);
+          createdOrderId = createdOrder.id;
+          orderSnapshot = createdOrder;
+        }
+
+        try {
+          await api.cart.clear();
+        } catch {
+          // Keep flow successful even if cart-clear API fails.
+        }
+
+        let latestOrders = await api.orders.listByUser(user.id);
+        if (latestOrders.length === 0 && createdOrderId) {
+          await wait(1200);
+          latestOrders = await api.orders.listByUser(user.id);
+        }
+
+        if (!orderSnapshot && createdOrderId) {
+          orderSnapshot = await api.orders.detail(createdOrderId);
+        }
+        const mergedOrders = latestOrders.length > 0
+          ? latestOrders
+          : orderSnapshot
+            ? [orderSnapshot]
+            : [];
+
+        if (cancelled) return;
+
+        setOrderId(createdOrderId);
+        setGatewayStatus(latestGatewayStatus);
+        setOrders(mergedOrders);
+        setCanOpenOrderDetail(
+          Boolean(
+            createdOrderId &&
+              isGuid(createdOrderId) &&
+              mergedOrders.some((order) => order.id === createdOrderId),
+          ),
+        );
+        setCartItems([]);
+        setCheckoutDraft(null);
+        applyVoucher(null);
+
+        const finalStatus = orderSnapshot?.status ?? (paymentResult === "success" ? "confirmed" : "pending");
+        addNotification({
+          title:
+            paymentResult === "success"
+              ? "Đặt hàng thành công"
+              : "Đơn hàng đang chờ xác nhận thanh toán",
+          body:
+            paymentResult === "success"
+              ? `Đơn ${createdOrderId} đã được tạo. Bạn có thể theo dõi chi tiết trong mục Đơn hàng.`
+              : `Đơn ${createdOrderId} đã tạo, vui lòng kiểm tra trạng thái thanh toán MoMo.`,
+          kind: "order",
+          orderId: createdOrderId || undefined,
+          orderStatus: finalStatus,
+        });
+        setState(paymentResult);
+      } catch (error) {
+        if (cancelled) return;
+        setState("failed");
+        setCanOpenOrderDetail(false);
+        const message = api.errors.getMessage(error, "Thanh toán thất bại. Vui lòng thử lại.");
+        setErrorMessage(message);
+        addNotification({
+          title: "Thanh toán chưa hoàn tất",
+          body: message,
+          kind: "info",
+        });
+      }
+    };
+
+    void processPayment();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    addresses,
+    appliedVoucher,
+    applyVoucher,
+    cartItems,
+    checkoutDraft,
+    paymentMethod,
+    addNotification,
+    setCartItems,
+    setCheckoutDraft,
+    setOrders,
+    user?.id,
+    user?.phone,
+    hasProcessed,
+  ]);
 
   const tone = useMemo(() => {
     if (state === "success") {
       return {
         colors: ["#1B4332", "#2D6A4F"] as const,
         icon: "check-circle",
-        title: "Đặt hàng thành công! 🎉",
-        subtitle: "Cảm ơn bạn đã tin tưởng GiftBox. Đơn hàng của bạn đang được xử lý.",
+        title: "Đặt hàng thành công",
+        subtitle: "Đơn hàng của bạn đã được tạo thành công.",
+      };
+    }
+
+    if (state === "pending") {
+      return {
+        colors: ["#6B4F1D", "#B8860B"] as const,
+        icon: "hourglass-top",
+        title: "Đơn hàng đang chờ xác nhận thanh toán",
+        subtitle: "Đơn đã tạo, vui lòng hoàn tất hoặc kiểm tra trạng thái trên MoMo.",
       };
     }
 
@@ -58,7 +313,7 @@ export function PaymentScreen() {
         colors: ["#7F1D1D", colors.error] as const,
         icon: "cancel",
         title: "Thanh toán thất bại",
-        subtitle: "Giao dịch không thành công. Vui lòng kiểm tra lại và thử lại.",
+        subtitle: errorMessage || "Giao dịch không thành công. Vui lòng thử lại.",
       };
     }
 
@@ -68,13 +323,13 @@ export function PaymentScreen() {
       title: "Đang xử lý thanh toán",
       subtitle: paymentLabels[paymentMethod] || "Đang kết nối cổng thanh toán...",
     };
-  }, [paymentMethod, state]);
+  }, [errorMessage, paymentMethod, state]);
 
   if (state === "processing") {
     return (
       <LinearGradient colors={tone.colors} style={styles.processingRoot}>
         <View style={styles.processingCircle}>
-          <Text style={styles.processingEmoji}>💳</Text>
+          <Text style={styles.processingEmoji}>ðŸ’³</Text>
         </View>
         <Text style={styles.processingTitle}>{tone.title}</Text>
         <Text style={styles.processingSubtitle}>{tone.subtitle}</Text>
@@ -85,8 +340,8 @@ export function PaymentScreen() {
         <View style={styles.processingSteps}>
           {[
             "Kết nối cổng thanh toán...",
-            "Xác thực giao dịch...",
-            "Đang xử lý...",
+            "Tạo đơn hàng...",
+            "Đồng bộ trạng thái...",
           ].map((item) => (
             <View key={item} style={styles.processingRow}>
               <View style={styles.processingDot} />
@@ -109,17 +364,20 @@ export function PaymentScreen() {
           <Text style={styles.bannerSubtitle}>{tone.subtitle}</Text>
         </LinearGradient>
 
-        {state === "success" ? (
+        {state === "success" || state === "pending" ? (
           <View style={styles.body}>
             <View style={styles.summaryCard}>
-              <InfoRow label="Mã đơn hàng" value={orderId || "—"} highlight />
-              <InfoRow label="Phương thức" value={paymentLabels[paymentMethod] || "—"} />
+              <InfoRow label="Mã đơn hàng" value={orderId || "--"} highlight />
+              <InfoRow label="Phương thức" value={paymentLabels[paymentMethod] || "--"} />
+              {gatewayStatus ? (
+                <InfoRow label="Trạng thái cổng thanh toán" value={gatewayStatus} />
+              ) : null}
               <InfoRow label="Tổng thanh toán" value={formatPrice(total)} highlight />
-              <InfoRow label="Thời gian giao hàng dự kiến" value="2-3 ngày làm việc" />
+              <InfoRow label="Thời gian giao dự kiến" value="2-3 ngày làm việc" />
             </View>
 
             <View style={styles.centerMessage}>
-              <Text style={styles.centerEmoji}>🎁</Text>
+              <Text style={styles.centerEmoji}>ðŸŽ</Text>
               <Text style={styles.centerText}>
                 Chúng tôi sẽ thông báo khi đơn hàng được xác nhận và giao hàng.
               </Text>
@@ -127,42 +385,54 @@ export function PaymentScreen() {
           </View>
         ) : (
           <View style={[styles.body, styles.failedBody]}>
-            <Text style={styles.centerEmoji}>😕</Text>
-            <Text style={styles.centerText}>
-              Có lỗi xảy ra trong quá trình thanh toán. Số tiền chưa bị trừ.
-            </Text>
+            <Text style={styles.centerEmoji}>ðŸ˜•</Text>
+            <Text style={styles.centerText}>{tone.subtitle}</Text>
           </View>
         )}
 
         <View style={styles.footer}>
-          {state === "success" ? (
+          {state === "success" || state === "pending" ? (
             <>
               <PrimaryButton
-                label="Theo Dõi Đơn Hàng"
-                onPress={() =>
+                label="Theo dõi đơn hàng"
+                onPress={() => {
+                  if (canOpenOrderDetail && isGuid(orderId)) {
+                    navigation.reset({
+                      index: 1,
+                      routes: [
+                        { name: "MainTabs", params: { screen: "OrdersTab" } },
+                        { name: "OrderDetail", params: { orderId } },
+                      ],
+                    });
+                    return;
+                  }
+
                   navigation.reset({
-                    index: 1,
-                    routes: [
-                      { name: "MainTabs", params: { screen: "OrdersTab" } },
-                      { name: "OrderDetail", params: { orderId } },
-                    ],
-                  })
-                }
+                    index: 0,
+                    routes: [{ name: "MainTabs", params: { screen: "OrdersTab" } }],
+                  });
+                }}
               />
               <SecondaryButton
-                label="Về Trang Chủ"
+                label="Về trang chủ"
                 onPress={() => navigation.reset({ index: 0, routes: [{ name: "MainTabs" }] })}
               />
             </>
           ) : (
             <>
               <PrimaryButton
-                label="Thử Lại"
-                onPress={() => navigation.replace("Payment", { paymentMethod, total })}
+                label="Thử lại"
+                onPress={() => {
+                  Toast.show({
+                    type: "info",
+                    text1: "Đang thử lại thanh toán",
+                  });
+                  navigation.replace("Payment", { paymentMethod, total });
+                }}
                 icon="refresh"
               />
               <SecondaryButton
-                label="Về Trang Chủ"
+                label="Về trang chủ"
                 onPress={() => navigation.reset({ index: 0, routes: [{ name: "MainTabs" }] })}
               />
             </>
@@ -412,3 +682,5 @@ const styles = StyleSheet.create({
     color: colors.textSoft,
   },
 });
+
+

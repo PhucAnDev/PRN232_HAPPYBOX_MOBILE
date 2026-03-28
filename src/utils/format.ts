@@ -42,7 +42,7 @@ export const calculateCartSummary = (
   subtotal: number,
   voucher: Voucher | null,
 ): CartSummary => {
-  const shipping = subtotal >= 1500000 ? 0 : 30000;
+  const shipping = subtotal >= 500000 ? 0 : 30000;
   let discount = 0;
 
   if (voucher && voucher.isValid && subtotal >= voucher.minOrder) {

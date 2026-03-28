@@ -1,10 +1,12 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { MaterialIcons } from "@expo/vector-icons";
-import React, { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import React, { useEffect, useMemo } from "react";
 import { Controller, useForm } from "react-hook-form";
 import {
   Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Switch,
@@ -19,6 +21,7 @@ import { ProductCard } from "../../../components/cards/ProductCard";
 import { AppScreen, EmptyState, Field } from "../../../components/common/Primitives";
 import { AppHeader } from "../../../components/navigation/AppHeader";
 import { giftBoxes, products } from "../../../mocks/data";
+import { api } from "../../../services/mockApi";
 import { useAppStore } from "../../../store/useAppStore";
 import { Address } from "../../../types/domain";
 import { colors, radius, shadows, spacing, typography } from "../../../theme/tokens";
@@ -46,10 +49,38 @@ type AddressValues = z.infer<typeof addressSchema>;
 
 export function AccountScreen() {
   const navigation = useNavigation<any>();
+  const isAuthenticated = useAppStore((state) => state.isAuthenticated);
   const user = useAppStore((state) => state.user);
+  const setUser = useAppStore((state) => state.setUser);
   const orders = useAppStore((state) => state.orders);
   const wishlist = useAppStore((state) => state.wishlist);
   const logout = useAppStore((state) => state.logout);
+
+  const profileQuery = useQuery({
+    queryKey: ["profile", "account"],
+    queryFn: api.profile.get,
+    enabled: isAuthenticated,
+  });
+
+  useEffect(() => {
+    if (!profileQuery.data) return;
+    setUser(profileQuery.data);
+  }, [profileQuery.data, setUser]);
+
+  if (!isAuthenticated) {
+    return (
+      <AppScreen backgroundColor={colors.ivory}>
+        <AppHeader title="Tài Khoản" showBack={false} />
+        <EmptyState
+          icon="person-outline"
+          title="Bạn chưa đăng nhập"
+          subtitle="Đăng nhập để xem hồ sơ, theo dõi đơn hàng và quản lý thông tin cá nhân."
+          actionLabel="Đăng nhập ngay"
+          onPressAction={() => navigation.navigate("SignIn")}
+        />
+      </AppScreen>
+    );
+  }
 
   const orderStats = [
     { label: "Tất cả", count: orders.length },
@@ -69,7 +100,7 @@ export function AccountScreen() {
       items: [
         { icon: "person-outline", label: "Chỉnh sửa hồ sơ", route: "EditProfile" },
         { icon: "location-on", label: "Địa chỉ giao hàng", route: "AddressList" },
-        { icon: "lock-outline", label: "Đổi mật khẩu", route: "change-password" },
+        { icon: "lock-outline", label: "Đổi mật khẩu", route: "ChangePassword" },
       ],
     },
     {
@@ -98,7 +129,26 @@ export function AccountScreen() {
         showNotification
         onPressRight={() => navigation.navigate("Notifications")}
       />
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={profileQuery.isFetching}
+            onRefresh={() => {
+              void profileQuery.refetch();
+            }}
+            tintColor={colors.primary}
+          />
+        }
+      >
+        {profileQuery.isError ? (
+          <View style={styles.profileSyncError}>
+            <MaterialIcons color={colors.error} name="sync-problem" size={14} />
+            <Text style={styles.profileSyncErrorText}>
+              Không thể đồng bộ hồ sơ từ server. Đang hiển thị dữ liệu gần nhất.
+            </Text>
+          </View>
+        ) : null}
         <View style={styles.profileHero}>
           <View style={styles.profileRow}>
             <View style={styles.avatarWrap}>
@@ -677,6 +727,24 @@ function PrimaryAction({
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
+  },
+  profileSyncError: {
+    marginHorizontal: 20,
+    marginTop: spacing.base,
+    paddingHorizontal: spacing.base,
+    paddingVertical: 10,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: "#F5BCBC",
+    backgroundColor: colors.errorSoft,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  profileSyncErrorText: {
+    flex: 1,
+    fontSize: typography.caption,
+    color: colors.error,
   },
   profileHero: {
     marginHorizontal: 20,

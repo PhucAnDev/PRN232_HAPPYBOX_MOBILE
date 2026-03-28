@@ -7,6 +7,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import React from "react";
 import { BottomTabBar } from "../components/navigation/BottomTabBar";
 import { AccountScreen, AddressFormScreen, AddressListScreen, EditProfileScreen, WishlistScreen } from "../features/account/screens/AccountScreens";
+import { ChangePasswordScreen } from "../features/account/screens/ChangePasswordScreen";
 import { ForgotPasswordScreen, OnboardingScreen, SignInScreen, SignUpScreen, SplashScreen } from "../features/auth/screens/AuthScreens";
 import { ChatbotScreen } from "../features/chatbot/screens/ChatbotScreen";
 import { CartScreen, CheckoutScreen } from "../features/checkout/screens/CheckoutScreens";
@@ -71,6 +72,7 @@ export function RootNavigator() {
         <Stack.Screen name="Payment" component={PaymentScreen} />
         <Stack.Screen name="OrderDetail" component={OrderDetailScreen} />
         <Stack.Screen name="EditProfile" component={EditProfileScreen} />
+        <Stack.Screen name="ChangePassword" component={ChangePasswordScreen} />
         <Stack.Screen name="AddressList" component={AddressListScreen} />
         <Stack.Screen name="AddressForm" component={AddressFormScreen} />
         <Stack.Screen name="VoucherCenter" component={VoucherCenterScreen} />

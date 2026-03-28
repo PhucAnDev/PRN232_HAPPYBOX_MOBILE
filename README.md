@@ -6,6 +6,10 @@ This repository now runs as an Expo React Native mobile app.
 
 1. `npm install`
 2. `npm run android` or `npm run start`
+3. Set API host for mobile:
+   - PowerShell: `$env:EXPO_PUBLIC_API_BASE_URL="https://prn232.onrender.com"`
+   - Or create `.env` with `EXPO_PUBLIC_API_BASE_URL=...`
+   - If you run API locally on Android emulator, use `http://10.0.2.2:<port>`
 
 ## Notes
 

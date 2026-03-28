@@ -1,6 +1,6 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Image,
   Pressable,
@@ -19,7 +19,10 @@ import { useAppStore } from "../../../store/useAppStore";
 import { colors, radius, shadows, spacing } from "../../../theme/tokens";
 import { formatPrice } from "../../../utils/format";
 
+
 const sortOptions = ["Phổ biến", "Giá tăng dần", "Giá giảm dần", "Mới nhất"] as const;
+
+const PAGE_SIZE = 8;
 
 export function ProductListScreen() {
   const navigation = useNavigation<any>();
@@ -30,6 +33,7 @@ export function ProductListScreen() {
   const [sortBy, setSortBy] = useState<(typeof sortOptions)[number]>("Phổ biến");
   const [viewMode, setViewMode] = useState<"grid" | "list">("list");
   const [activeCategory, setActiveCategory] = useState(route.params?.categoryId ?? "all");
+  const [page, setPage] = useState(1);
 
   const productsQuery = useQuery({
     queryKey: ["products"],
@@ -60,6 +64,35 @@ export function ProductListScreen() {
     return list;
   }, [activeCategory, productsQuery.data, query, sortBy]);
 
+  useEffect(() => {
+    if (route.params?.categoryId) {
+      setActiveCategory(route.params.categoryId);
+    }
+  }, [route.params?.categoryId]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [activeCategory, query, sortBy, viewMode]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
+  const paginatedProducts = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, page]);
+
+  const pageItems = useMemo(() => {
+    const pages = new Set<number>([1, totalPages, page - 1, page, page + 1]);
+    return Array.from(pages)
+      .filter((item) => item >= 1 && item <= totalPages)
+      .sort((a, b) => a - b);
+  }, [page, totalPages]);
   const categories = [{ id: "all", name: "Tất Cả", icon: "🛍️" }, ...(categoriesQuery.data ?? [])];
 
   return (
@@ -110,7 +143,7 @@ export function ProductListScreen() {
       </View>
 
       <View style={styles.toolbar}>
-        <Text style={styles.toolbarCount}>{filtered.length} sản phẩm</Text>
+        <Text style={styles.toolbarCount}>{filtered.length} sản phẩm • Trang {page}/{totalPages}</Text>
         <View style={styles.toolbarActions}>
           <View style={styles.sortWrap}>
             <Pressable onPress={() => setShowSort((value) => !value)} style={styles.sortButton}>
@@ -171,7 +204,7 @@ export function ProductListScreen() {
           </View>
         ) : viewMode === "grid" ? (
           <View style={styles.grid}>
-            {filtered.map((product) => (
+            {paginatedProducts.map((product) => (
               <ProductCard
                 key={product.id}
                 product={product}
@@ -192,7 +225,7 @@ export function ProductListScreen() {
           </View>
         ) : (
           <View style={styles.listStack}>
-            {filtered.map((product) => (
+            {paginatedProducts.map((product) => (
               <ProductCard
                 key={product.id}
                 mode="list"
@@ -213,6 +246,50 @@ export function ProductListScreen() {
             ))}
           </View>
         )}
+        {filtered.length > 0 && totalPages > 1 ? (
+          <View style={styles.paginationWrap}>
+            <Pressable
+              onPress={() => setPage((current) => Math.max(1, current - 1))}
+              style={[styles.pageArrow, page === 1 && styles.pageArrowDisabled]}
+              disabled={page === 1}
+            >
+              <MaterialIcons
+                color={page === 1 ? colors.textMuted : colors.text}
+                name="chevron-left"
+                size={18}
+              />
+            </Pressable>
+
+            <View style={styles.pageNumbers}>
+              {pageItems.map((item) => {
+                const active = item === page;
+                return (
+                  <Pressable
+                    key={item}
+                    onPress={() => setPage(item)}
+                    style={[styles.pageChip, active && styles.pageChipActive]}
+                  >
+                    <Text style={[styles.pageChipText, active && styles.pageChipTextActive]}>
+                      {item}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Pressable
+              onPress={() => setPage((current) => Math.min(totalPages, current + 1))}
+              style={[styles.pageArrow, page === totalPages && styles.pageArrowDisabled]}
+              disabled={page === totalPages}
+            >
+              <MaterialIcons
+                color={page === totalPages ? colors.textMuted : colors.text}
+                name="chevron-right"
+                size={18}
+              />
+            </Pressable>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -289,7 +366,7 @@ export function ProductDetailScreen() {
                 />
               </Pressable>
               <Pressable
-                onPress={() => Toast.show({ type: "info", text1: "Tính năng đang phát triển" })}
+                onPress={() => Toast.show({ type: "info", text1: "TÃ­nh nÄƒng Ä‘ang phÃ¡t triá»ƒn" })}
                 style={styles.heroCircle}
               >
                 <MaterialIcons color={colors.text} name="ios-share" size={18} />
@@ -334,11 +411,11 @@ export function ProductDetailScreen() {
               ))}
               <Text style={styles.ratingValue}>{product.rating}</Text>
             </View>
-            <Text style={styles.ratingCount}>({product.reviewCount} đánh giá)</Text>
+            <Text style={styles.ratingCount}>({product.reviewCount} Ä‘Ã¡nh giÃ¡)</Text>
           </View>
 
           <View style={styles.quantityCard}>
-            <Text style={styles.quantityLabel}>Số lượng</Text>
+            <Text style={styles.quantityLabel}>Sá»‘ lÆ°á»£ng</Text>
             <View style={styles.quantityControls}>
               <Pressable
                 onPress={() => setQuantity((value) => Math.max(1, value - 1))}
@@ -359,9 +436,9 @@ export function ProductDetailScreen() {
 
           <View style={styles.tabsShell}>
             {[
-              { id: "desc", label: "Mô tả" },
-              { id: "detail", label: "Chi tiết" },
-              { id: "review", label: "Đánh giá" },
+              { id: "desc", label: "MÃ´ táº£" },
+              { id: "detail", label: "Chi tiáº¿t" },
+              { id: "review", label: "ÄÃ¡nh giÃ¡" },
             ].map((tab) => {
               const active = activeTab === tab.id;
               return (
@@ -395,16 +472,16 @@ export function ProductDetailScreen() {
             <View>
               {[
                 {
-                  name: "Nguyễn Văn A",
+                  name: "Nguyá»…n VÄƒn A",
                   rating: 5,
                   comment:
-                    "Sản phẩm rất tốt, đóng gói đẹp, giao nhanh. Mua làm quà biếu rất ưng ý!",
+                    "Sáº£n pháº©m ráº¥t tá»‘t, Ä‘Ã³ng gÃ³i Ä‘áº¹p, giao nhanh. Mua lÃ m quÃ  biáº¿u ráº¥t Æ°ng Ã½!",
                 },
                 {
-                  name: "Trần Thị B",
+                  name: "Tráº§n Thá»‹ B",
                   rating: 4,
                   comment:
-                    "Chất lượng tốt, hương vị thơm ngon. Sẽ tiếp tục ủng hộ shop.",
+                    "Cháº¥t lÆ°á»£ng tá»‘t, hÆ°Æ¡ng vá»‹ thÆ¡m ngon. Sáº½ tiáº¿p tá»¥c á»§ng há»™ shop.",
                 },
               ].map((review) => (
                 <View key={review.name} style={styles.reviewItem}>
@@ -434,7 +511,7 @@ export function ProductDetailScreen() {
 
           {related.length > 0 ? (
             <View style={styles.relatedSection}>
-              <Text style={styles.relatedTitle}>Sản phẩm liên quan</Text>
+              <Text style={styles.relatedTitle}>Sáº£n pháº©m liÃªn quan</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={styles.relatedRow}>
                   {related.map((item) => (
@@ -474,12 +551,12 @@ export function ProductDetailScreen() {
                 quantity,
                 type: "product",
               });
-              Toast.show({ type: "success", text1: `Đã thêm ${quantity} sản phẩm vào giỏ hàng!` });
+              Toast.show({ type: "success", text1: `ÄÃ£ thÃªm ${quantity} sáº£n pháº©m vÃ o giá» hÃ ng!` });
             }}
             style={[styles.ctaButton, styles.ctaPrimary]}
           >
             <MaterialIcons color={colors.white} name="shopping-bag" size={16} />
-            <Text style={styles.ctaPrimaryText}>Thêm giỏ hàng</Text>
+            <Text style={styles.ctaPrimaryText}>ThÃªm giá» hÃ ng</Text>
           </Pressable>
           <Pressable
             onPress={() => {
@@ -680,6 +757,55 @@ const styles = StyleSheet.create({
   emptyButtonText: {
     fontSize: 13,
     fontWeight: "600",
+    color: colors.white,
+  },
+  paginationWrap: {
+    marginTop: spacing.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+  },
+  pageArrow: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pageArrowDisabled: {
+    backgroundColor: colors.surface,
+    borderColor: colors.surface,
+  },
+  pageNumbers: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  pageChip: {
+    minWidth: 34,
+    height: 34,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pageChipActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  pageChipText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.textSoft,
+  },
+  pageChipTextActive: {
     color: colors.white,
   },
   notFound: {

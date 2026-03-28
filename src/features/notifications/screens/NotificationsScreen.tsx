@@ -1,17 +1,41 @@
 import { MaterialIcons } from "@expo/vector-icons";
-import React from "react";
+import React, { useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { AppScreen, EmptyState } from "../../../components/common/Primitives";
 import { AppHeader } from "../../../components/navigation/AppHeader";
 import { useAppStore } from "../../../store/useAppStore";
+import { AppNotification } from "../../../types/domain";
 import { colors, radius, spacing, typography } from "../../../theme/tokens";
 import { formatShortDate } from "../../../utils/format";
 
 export function NotificationsScreen() {
   const navigation = useNavigation<any>();
   const notifications = useAppStore((state) => state.notifications);
+  const orders = useAppStore((state) => state.orders);
   const markNotificationRead = useAppStore((state) => state.markNotificationRead);
+  const sortedNotifications = useMemo(
+    () =>
+      [...notifications].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      ),
+    [notifications],
+  );
+
+  const onPressNotification = (item: AppNotification) => {
+    markNotificationRead(item.id);
+
+    if (item.kind !== "order") {
+      return;
+    }
+
+    if (item.orderId && orders.some((order) => order.id === item.orderId)) {
+      navigation.navigate("OrderDetail", { orderId: item.orderId });
+      return;
+    }
+
+    navigation.navigate("MainTabs", { screen: "OrdersTab" });
+  };
 
   if (notifications.length === 0) {
     return (
@@ -30,11 +54,11 @@ export function NotificationsScreen() {
     <AppScreen backgroundColor={colors.ivory}>
       <AppHeader title="Thông Báo" onBack={() => navigation.goBack()} />
       <View style={styles.list}>
-        {notifications.map((item) => (
+        {sortedNotifications.map((item) => (
           <Pressable
             key={item.id}
             style={[styles.card, !item.isRead && styles.cardUnread]}
-            onPress={() => markNotificationRead(item.id)}
+            onPress={() => onPressNotification(item)}
           >
             <View style={styles.iconWrap}>
               <MaterialIcons

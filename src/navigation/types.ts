@@ -25,6 +25,7 @@ export type RootStackParamList = {
   Payment: { paymentMethod: PaymentMethodId; total: number };
   OrderDetail: { orderId?: string | null };
   EditProfile: undefined;
+  ChangePassword: undefined;
   AddressList: undefined;
   AddressForm: { addressId?: string } | undefined;
   VoucherCenter: undefined;

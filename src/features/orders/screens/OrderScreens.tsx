@@ -1,17 +1,22 @@
 import { MaterialIcons } from "@expo/vector-icons";
-import React, { useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
+import Toast from "react-native-toast-message";
 import { OrderCard } from "../../../components/cards/OrderCard";
 import { AppScreen, EmptyState } from "../../../components/common/Primitives";
 import { AppHeader } from "../../../components/navigation/AppHeader";
+import { api } from "../../../services/mockApi";
 import { useAppStore } from "../../../store/useAppStore";
 import { OrderStatus } from "../../../types/domain";
 import { colors, radius, shadows, spacing, typography } from "../../../theme/tokens";
@@ -28,13 +33,74 @@ const statusTabs: Array<{ key: OrderStatus | "all"; label: string }> = [
 
 export function OrdersScreen() {
   const navigation = useNavigation<any>();
+  const isAuthenticated = useAppStore((state) => state.isAuthenticated);
+  const user = useAppStore((state) => state.user);
   const orders = useAppStore((state) => state.orders);
+  const setOrders = useAppStore((state) => state.setOrders);
   const [activeTab, setActiveTab] = useState<OrderStatus | "all">("all");
+  const emptySyncRetryRef = useRef(0);
+
+  const ordersQuery = useQuery({
+    queryKey: ["orders", user?.id],
+    queryFn: () => api.orders.listByUser(user?.id || ""),
+    enabled: Boolean(isAuthenticated && user?.id),
+    staleTime: 15_000,
+  });
+
+  useEffect(() => {
+    if (!ordersQuery.data) return;
+
+    if (ordersQuery.data.length === 0 && orders.length > 0) {
+      if (emptySyncRetryRef.current < 1) {
+        emptySyncRetryRef.current += 1;
+        const retryTimeout = setTimeout(() => {
+          void ordersQuery.refetch();
+        }, 1200);
+
+        return () => {
+          clearTimeout(retryTimeout);
+        };
+      }
+
+      return;
+    }
+
+    emptySyncRetryRef.current = 0;
+    setOrders(ordersQuery.data);
+  }, [orders.length, ordersQuery.data, ordersQuery.refetch, setOrders]);
 
   const filtered = useMemo(
     () => orders.filter((order) => (activeTab === "all" ? true : order.status === activeTab)),
     [activeTab, orders],
   );
+
+  if (!isAuthenticated) {
+    return (
+      <AppScreen backgroundColor={colors.ivory}>
+        <AppHeader title="Đơn Hàng" showBack={false} />
+        <EmptyState
+          icon="inventory-2"
+          title="Bạn chưa đăng nhập"
+          subtitle="Đăng nhập để theo dõi trạng thái đơn hàng theo thời gian thực."
+          actionLabel="Đăng nhập ngay"
+          onPressAction={() => navigation.navigate("SignIn")}
+        />
+      </AppScreen>
+    );
+  }
+
+  if (ordersQuery.isLoading && orders.length === 0) {
+    return (
+      <AppScreen backgroundColor={colors.ivory} padded>
+        <AppHeader title="Đơn Hàng" showBack={false} />
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyEmoji}>⌛</Text>
+          <Text style={styles.emptyTitle}>Đang tải đơn hàng</Text>
+          <Text style={styles.emptyText}>Vui lòng chờ trong giây lát...</Text>
+        </View>
+      </AppScreen>
+    );
+  }
 
   if (orders.length === 0) {
     return (
@@ -55,7 +121,19 @@ export function OrdersScreen() {
     <AppScreen backgroundColor={colors.ivory} scroll={false}>
       <AppHeader title="Đơn Hàng" showBack={false} />
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={ordersQuery.isFetching}
+            onRefresh={() => {
+              emptySyncRetryRef.current = 0;
+              void ordersQuery.refetch();
+            }}
+            tintColor={colors.primary}
+          />
+        }
+      >
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -98,12 +176,50 @@ export function OrdersScreen() {
     </AppScreen>
   );
 }
-
 export function OrderDetailScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
+  const user = useAppStore((state) => state.user);
   const orders = useAppStore((state) => state.orders);
-  const order = orders.find((item) => item.id === route.params?.orderId);
+  const setOrders = useAppStore((state) => state.setOrders);
+  const orderId = route.params?.orderId as string | undefined;
+
+  const fallbackOrder = orders.find((item) => item.id === orderId) ?? null;
+
+  const detailQuery = useQuery({
+    queryKey: ["order", orderId],
+    queryFn: () => api.orders.detail(orderId || ""),
+    enabled: Boolean(orderId),
+  });
+
+  const order = detailQuery.data ?? fallbackOrder;
+  const isCancellable = order?.status === "pending" || order?.status === "confirmed";
+
+  const cancelMutation = useMutation({
+    mutationFn: async () => {
+      if (!order?.id) {
+        throw new Error("Không tìm thấy mã đơn hàng hợp lệ.");
+      }
+
+      await api.orders.cancel(order.id);
+
+      if (user?.id) {
+        const latestOrders = await api.orders.listByUser(user.id);
+        setOrders(latestOrders);
+      }
+    },
+    onSuccess: () => {
+      Toast.show({ type: "success", text1: "Đã gửi yêu cầu hủy đơn" });
+      void detailQuery.refetch();
+    },
+    onError: (error) => {
+      Toast.show({
+        type: "error",
+        text1: "Không thể hủy đơn hàng",
+        text2: api.errors.getMessage(error, "Vui lòng thử lại sau."),
+      });
+    },
+  });
 
   if (!order) {
     return (
@@ -112,7 +228,7 @@ export function OrderDetailScreen() {
         <EmptyState
           icon="receipt-long"
           title="Không tìm thấy đơn hàng"
-          subtitle="Đơn hàng này hiện không tồn tại trong dữ liệu cục bộ."
+          subtitle="Đơn hàng này hiện không còn tồn tại hoặc đã bị xóa."
           actionLabel="Quay lại"
           onPressAction={() => navigation.goBack()}
         />
@@ -145,7 +261,19 @@ export function OrderDetailScreen() {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.detailContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.detailContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={detailQuery.isFetching}
+            onRefresh={() => {
+              void detailQuery.refetch();
+            }}
+            tintColor={colors.primary}
+          />
+        }
+      >
         <View style={styles.detailCard}>
           <Text style={styles.cardTitle}>Trạng thái đơn hàng</Text>
           {order.timeline.map((step, index) => (
@@ -236,16 +364,34 @@ export function OrderDetailScreen() {
           </View>
         </View>
 
-        {order.status === "pending" ? (
-          <Pressable style={styles.cancelButton}>
-            <Text style={styles.cancelText}>Hủy Đơn Hàng</Text>
+        {isCancellable ? (
+          <Pressable
+            style={[styles.cancelButton, cancelMutation.isPending && styles.cancelButtonDisabled]}
+            onPress={() => {
+              Alert.alert(
+                "Xác nhận hủy đơn",
+                "Bạn có chắc muốn hủy đơn hàng này không?",
+                [
+                  { text: "Không", style: "cancel" },
+                  {
+                    text: "Hủy đơn",
+                    style: "destructive",
+                    onPress: () => cancelMutation.mutate(),
+                  },
+                ],
+              );
+            }}
+            disabled={cancelMutation.isPending}
+          >
+            <Text style={styles.cancelText}>
+              {cancelMutation.isPending ? "Đang xử lý..." : "Hủy Đơn Hàng"}
+            </Text>
           </Pressable>
         ) : null}
       </ScrollView>
     </AppScreen>
   );
 }
-
 function SummaryRow({
   label,
   value,
@@ -534,6 +680,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginTop: spacing.base,
+  },
+  cancelButtonDisabled: {
+    opacity: 0.6,
   },
   cancelText: {
     fontSize: typography.body,
