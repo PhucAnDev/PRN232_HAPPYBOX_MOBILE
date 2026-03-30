@@ -31,8 +31,12 @@ const paymentLabels: Record<string, string> = {
 const MOMO_CALLBACK_PATH = "payment/momo/result";
 const MOMO_PENDING_ORDER_KEY = "giftbox:momo:pending-order-id";
 const MOMO_LOG_PREFIX = "[Payment][MoMo]";
+const ENABLE_MOMO_DEBUG_LOGS = false;
 
 function logMomoTiming(step: string, payload?: Record<string, unknown>) {
+  if (!ENABLE_MOMO_DEBUG_LOGS) {
+    return;
+  }
   const timestamp = new Date().toISOString();
   if (payload) {
     console.log(`${MOMO_LOG_PREFIX} ${timestamp} ${step}`, payload);
@@ -79,6 +83,7 @@ export function PaymentScreen() {
 
   const [state, setState] = useState<PaymentState>("processing");
   const [orderId, setOrderId] = useState("");
+  const [orderNumber, setOrderNumber] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [gatewayStatus, setGatewayStatus] = useState("");
   const [canOpenOrderDetail, setCanOpenOrderDetail] = useState(false);
@@ -89,6 +94,44 @@ export function PaymentScreen() {
 
   const paymentMethod = route.params?.paymentMethod ?? checkoutDraft?.paymentMethod ?? "cod";
   const total = route.params?.total ?? 0;
+
+  const clearCartAfterCheckout = useCallback(async (fallbackItemIds: string[]) => {
+    const waitFor = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const verifyCartEmpty = async () => {
+      try {
+        const latestCart = await api.cart.get();
+        return latestCart.length === 0;
+      } catch {
+        return false;
+      }
+    };
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await api.cart.clear();
+      } catch {
+        // Try fallback remove APIs below.
+      }
+
+      if (await verifyCartEmpty()) {
+        return true;
+      }
+
+      await waitFor(350 * (attempt + 1));
+    }
+
+    const uniqueItemIds = Array.from(new Set(fallbackItemIds.filter(Boolean)));
+    if (uniqueItemIds.length > 0) {
+      try {
+        await api.cart.removeItems(uniqueItemIds);
+      } catch {
+        await Promise.allSettled(uniqueItemIds.map((cartItemId) => api.cart.removeItem(cartItemId)));
+      }
+    }
+
+    return verifyCartEmpty();
+  }, []);
 
   const finalizeMomoPayment = useCallback(
     async (resolvedOrderId: string) => {
@@ -105,6 +148,7 @@ export function PaymentScreen() {
       handledMomoOrderRef.current = resolvedOrderId;
 
       setOrderId(resolvedOrderId);
+      setOrderNumber("");
       setState("processing");
       setErrorMessage("");
       setCanOpenOrderDetail(false);
@@ -143,6 +187,12 @@ export function PaymentScreen() {
           ? "success"
           : "pending";
 
+        const cartCleanupIds = cartItems.map((item) => item.id);
+        setCartItems([]);
+        setCheckoutDraft(null);
+        applyVoucher(null);
+        await clearCartAfterCheckout(cartCleanupIds);
+
         let orderSnapshot = await api.orders.detail(resolvedOrderId);
         let latestOrders: Awaited<ReturnType<typeof api.orders.listByUser>> = [];
         if (user?.id) {
@@ -152,6 +202,10 @@ export function PaymentScreen() {
         if (!orderSnapshot && latestOrders.length > 0) {
           orderSnapshot = latestOrders.find((order) => order.id === resolvedOrderId) || null;
         }
+        const resolvedOrderNumber =
+          orderSnapshot?.orderNumber ||
+          latestOrders.find((order) => order.id === resolvedOrderId)?.orderNumber ||
+          "";
 
         const mergedOrders = latestOrders.length > 0
           ? latestOrders
@@ -159,23 +213,14 @@ export function PaymentScreen() {
             ? [orderSnapshot]
             : [];
 
-        try {
-          await api.cart.clear();
-        } catch {
-          // Keep flow successful even if cart-clear API fails.
-        }
-
         setOrders(mergedOrders);
-        setCanOpenOrderDetail(
-          Boolean(
-            resolvedOrderId &&
-            isGuid(resolvedOrderId) &&
-            mergedOrders.some((order) => order.id === resolvedOrderId),
-          ),
+        setOrderNumber(resolvedOrderNumber);
+        const canOpenDetail = Boolean(
+          resolvedOrderId &&
+          isGuid(resolvedOrderId) &&
+          mergedOrders.some((order) => order.id === resolvedOrderId),
         );
-        setCartItems([]);
-        setCheckoutDraft(null);
-        applyVoucher(null);
+        setCanOpenOrderDetail(canOpenDetail);
 
         const finalStatus = orderSnapshot?.status ?? (paymentResult === "success" ? "confirmed" : "pending");
         addNotification({
@@ -192,6 +237,16 @@ export function PaymentScreen() {
           orderStatus: finalStatus,
         });
         setState(paymentResult);
+        if (paymentResult === "success") {
+          Toast.show({
+            type: "success",
+            text1: "Thanh toán thành công",
+          });
+          navigation.reset({
+            index: 0,
+            routes: [{ name: "MainTabs", params: { screen: "OrdersTab" } }],
+          });
+        }
         logMomoTiming("sync_status_complete", {
           orderId: resolvedOrderId,
           durationMs: Date.now() - syncStartedAt,
@@ -221,10 +276,13 @@ export function PaymentScreen() {
     [
       addNotification,
       applyVoucher,
+      cartItems,
+      clearCartAfterCheckout,
       setCartItems,
       setCheckoutDraft,
       setOrders,
       user?.id,
+      navigation,
     ],
   );
 
@@ -396,32 +454,41 @@ export function PaymentScreen() {
         let orderSnapshot: Awaited<ReturnType<typeof api.orders.detail>> = null;
 
         if (paymentMethod === "momo") {
-          const createMomoMobileStartedAt = Date.now();
+          const createOrderStartedAt = Date.now();
           logMomoTiming("create_order_start", {
             paymentMethod: "momo",
-            source: "create-mobile",
+            source: "orders.create",
           });
+          const createdOrder = await api.orders.create(payload);
+          logMomoTiming("create_order_done", {
+            paymentMethod: "momo",
+            source: "orders.create",
+            durationMs: Date.now() - createOrderStartedAt,
+            orderId: createdOrder.id,
+          });
+          createdOrderId = createdOrder.id;
+          orderSnapshot = createdOrder;
+
+          if (!createdOrderId) {
+            throw new Error("Không nhận được mã đơn hàng để tạo thanh toán MoMo.");
+          }
+
+          await AsyncStorage.setItem(MOMO_PENDING_ORDER_KEY, createdOrderId).catch(() => undefined);
+
+          const createMomoMobileStartedAt = Date.now();
           logMomoTiming("create_momo_mobile_start", {
-            orderDetailsCount: payload.orderDetails.length,
+            orderId: createdOrderId,
           });
-          const momoResponse = await api.payment.createOrderAndMomoPayment(payload);
+          const momoResponse = await api.payment.createOrderAndMomoPayment({
+            orderId: createdOrderId,
+            orderInfo: `Thanh toan don hang ${createdOrderId}`,
+          });
           logMomoTiming("create_momo_mobile_done", {
             durationMs: Date.now() - createMomoMobileStartedAt,
-            orderId: momoResponse.orderId,
+            orderId: momoResponse.orderId || createdOrderId,
             hasDeepLink: Boolean(momoResponse.deeplink?.trim()),
             hasPayUrl: Boolean(momoResponse.payUrl?.trim()),
           });
-          createdOrderId = momoResponse.orderId;
-          logMomoTiming("create_order_done", {
-            paymentMethod: "momo",
-            source: "create-mobile",
-            orderId: createdOrderId,
-          });
-
-          if (!createdOrderId) {
-            throw new Error("Không nhận được mã đơn hàng từ cổng thanh toán MoMo.");
-          }
-          await AsyncStorage.setItem(MOMO_PENDING_ORDER_KEY, createdOrderId).catch(() => undefined);
 
           const deeplink = momoResponse.deeplink?.trim() || "";
           const payUrl = momoResponse.payUrl?.trim() || "";
@@ -486,22 +553,34 @@ export function PaymentScreen() {
           });
           createdOrderId = createdOrder.id;
           orderSnapshot = createdOrder;
+          setOrderId(createdOrderId);
+          setOrderNumber(createdOrder.orderNumber?.trim() || "");
+          setGatewayStatus("");
+          const cartCleanupIds = cartItems.map((item) => item.id);
+          setCartItems([]);
+          setCheckoutDraft(null);
+          applyVoucher(null);
+          await clearCartAfterCheckout(cartCleanupIds);
+          setState("success");
         }
 
+        let latestOrders: Awaited<ReturnType<typeof api.orders.listByUser>> = [];
         try {
-          await api.cart.clear();
-        } catch {
-          // Keep flow successful even if cart-clear API fails.
-        }
-
-        let latestOrders = await api.orders.listByUser(user.id);
-        if (latestOrders.length === 0 && createdOrderId) {
-          await wait(1200);
           latestOrders = await api.orders.listByUser(user.id);
+          if (latestOrders.length === 0 && createdOrderId) {
+            await wait(1200);
+            latestOrders = await api.orders.listByUser(user.id);
+          }
+        } catch {
+          // Keep success flow even if refreshing order list fails.
         }
 
         if (!orderSnapshot && createdOrderId) {
-          orderSnapshot = await api.orders.detail(createdOrderId);
+          try {
+            orderSnapshot = await api.orders.detail(createdOrderId);
+          } catch {
+            // Keep success flow even if fetching detail fails.
+          }
         }
         const mergedOrders = latestOrders.length > 0
           ? latestOrders
@@ -511,7 +590,12 @@ export function PaymentScreen() {
 
         if (cancelled) return;
 
+        const resolvedDisplayOrderNumber =
+          orderSnapshot?.orderNumber?.trim() ||
+          mergedOrders.find((order) => order.id === createdOrderId)?.orderNumber?.trim() ||
+          "";
         setOrderId(createdOrderId);
+        setOrderNumber(resolvedDisplayOrderNumber);
         setGatewayStatus(latestGatewayStatus);
         setOrders(mergedOrders);
         setCanOpenOrderDetail(
@@ -521,9 +605,6 @@ export function PaymentScreen() {
             mergedOrders.some((order) => order.id === createdOrderId),
           ),
         );
-        setCartItems([]);
-        setCheckoutDraft(null);
-        applyVoucher(null);
 
         const finalStatus = orderSnapshot?.status ?? (paymentResult === "success" ? "confirmed" : "pending");
         addNotification({
@@ -580,6 +661,7 @@ export function PaymentScreen() {
     checkoutDraft,
     paymentMethod,
     addNotification,
+    clearCartAfterCheckout,
     finalizeMomoPayment,
     initialCallbackOrderId,
     initialUrlChecked,
@@ -619,7 +701,7 @@ export function PaymentScreen() {
     }
 
     return {
-      colors: [colors.primaryDark, colors.primary] as const,
+      colors: ["#7F0C20", "#990F2B"] as const,
       icon: "payments",
       title: "Đang xử lý thanh toán",
       subtitle: paymentLabels[paymentMethod] || "Đang kết nối cổng thanh toán...",
@@ -630,7 +712,7 @@ export function PaymentScreen() {
     return (
       <LinearGradient colors={tone.colors} style={styles.processingRoot}>
         <View style={styles.processingCircle}>
-          <Text style={styles.processingEmoji}>ðŸ’³</Text>
+          <MaterialIcons color="#3AA8DE" name="credit-card" size={42} />
         </View>
         <Text style={styles.processingTitle}>{tone.title}</Text>
         <Text style={styles.processingSubtitle}>{tone.subtitle}</Text>
@@ -641,8 +723,8 @@ export function PaymentScreen() {
         <View style={styles.processingSteps}>
           {[
             "Kết nối cổng thanh toán...",
-            "Tạo đơn hàng...",
-            "Đồng bộ trạng thái...",
+            "Xác thực giao dịch...",
+            "Đang xử lý...",
           ].map((item) => (
             <View key={item} style={styles.processingRow}>
               <View style={styles.processingDot} />
@@ -668,7 +750,7 @@ export function PaymentScreen() {
         {state === "success" || state === "pending" ? (
           <View style={styles.body}>
             <View style={styles.summaryCard}>
-              <InfoRow label="Mã đơn hàng" value={orderId || "--"} highlight />
+              <InfoRow label="Mã đơn hàng" value={orderNumber || "--"} highlight />
               <InfoRow label="Phương thức" value={paymentLabels[paymentMethod] || "--"} />
               {gatewayStatus ? (
                 <InfoRow label="Trạng thái cổng thanh toán" value={gatewayStatus} />
@@ -678,7 +760,7 @@ export function PaymentScreen() {
             </View>
 
             <View style={styles.centerMessage}>
-              <Text style={styles.centerEmoji}>ðŸŽ</Text>
+              <MaterialIcons color={colors.primary} name="card-giftcard" size={64} />
               <Text style={styles.centerText}>
                 Chúng tôi sẽ thông báo khi đơn hàng được xác nhận và giao hàng.
               </Text>
@@ -802,50 +884,48 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 28,
+    paddingHorizontal: 32,
   },
   processingCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    width: 108,
+    height: 108,
+    borderRadius: 54,
+    backgroundColor: "rgba(255,255,255,0.14)",
     borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.24)",
+    borderColor: "rgba(201,168,76,0.95)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: spacing.xl,
   },
-  processingEmoji: {
-    fontSize: 40,
-  },
   processingTitle: {
-    fontSize: 22,
+    fontSize: typography.h1,
     fontWeight: "900",
     color: colors.white,
     textAlign: "center",
+    lineHeight: 32,
   },
   processingSubtitle: {
-    marginTop: spacing.sm,
-    fontSize: typography.body,
+    marginTop: 10,
+    fontSize: typography.title,
     color: "rgba(255,255,255,0.78)",
     textAlign: "center",
   },
   processingAmount: {
-    marginTop: spacing.base,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    marginTop: spacing.lg,
+    paddingHorizontal: 24,
+    paddingVertical: 11,
     borderRadius: radius.full,
-    backgroundColor: "rgba(255,255,255,0.16)",
+    backgroundColor: "rgba(255,255,255,0.20)",
   },
   processingAmountText: {
-    fontSize: typography.body,
+    fontSize: typography.h3,
     fontWeight: "900",
     color: colors.gold,
   },
   processingSteps: {
-    marginTop: spacing.xxxl,
-    width: "100%",
-    gap: spacing.sm,
+    marginTop: 46,
+    width: "72%",
+    gap: 14,
   },
   processingRow: {
     flexDirection: "row",
@@ -853,14 +933,15 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   processingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: colors.gold,
   },
   processingText: {
-    fontSize: typography.caption,
+    fontSize: typography.body,
     color: "rgba(255,255,255,0.78)",
+    fontWeight: "600",
   },
   banner: {
     paddingTop: 64,
