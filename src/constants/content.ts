@@ -32,7 +32,7 @@ export const paymentMethods: PaymentMethodOption[] = [
     id: "cod",
     label: "Thanh toán khi nhận hàng",
     subtitle: "An toàn, phù hợp đơn quà tặng",
-    icon: "cash",
+    icon: "local-atm",
   },
   {
     id: "bank",

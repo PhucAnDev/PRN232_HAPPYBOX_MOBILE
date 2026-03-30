@@ -320,6 +320,14 @@ export function ProductDetailScreen() {
     .filter((item) => item.id !== productId)
     .slice(0, 4);
 
+  if (productQuery.isLoading && !product) {
+    return (
+      <View style={styles.notFound}>
+        <Text style={styles.emptyTitle}>Vui lòng chờ trong giây lát</Text>
+      </View>
+    );
+  }
+
   if (!product) {
     return (
       <View style={styles.notFound}>
@@ -366,7 +374,7 @@ export function ProductDetailScreen() {
                 />
               </Pressable>
               <Pressable
-                onPress={() => Toast.show({ type: "info", text1: "TÃ­nh nÄƒng Ä‘ang phÃ¡t triá»ƒn" })}
+                onPress={() => Toast.show({ type: "info", text1: "Tính năng đang phát triển" })}
                 style={styles.heroCircle}
               >
                 <MaterialIcons color={colors.text} name="ios-share" size={18} />
@@ -411,11 +419,11 @@ export function ProductDetailScreen() {
               ))}
               <Text style={styles.ratingValue}>{product.rating}</Text>
             </View>
-            <Text style={styles.ratingCount}>({product.reviewCount} Ä‘Ã¡nh giÃ¡)</Text>
+            <Text style={styles.ratingCount}>({product.reviewCount} đánh giá)</Text>
           </View>
 
           <View style={styles.quantityCard}>
-            <Text style={styles.quantityLabel}>Sá»‘ lÆ°á»£ng</Text>
+            <Text style={styles.quantityLabel}>Số lượng</Text>
             <View style={styles.quantityControls}>
               <Pressable
                 onPress={() => setQuantity((value) => Math.max(1, value - 1))}
@@ -436,9 +444,9 @@ export function ProductDetailScreen() {
 
           <View style={styles.tabsShell}>
             {[
-              { id: "desc", label: "MÃ´ táº£" },
-              { id: "detail", label: "Chi tiáº¿t" },
-              { id: "review", label: "ÄÃ¡nh giÃ¡" },
+              { id: "desc", label: "Mô tả" },
+              { id: "detail", label: "Chi tiết" },
+              { id: "review", label: "Đánh giá" },
             ].map((tab) => {
               const active = activeTab === tab.id;
               return (
@@ -472,16 +480,16 @@ export function ProductDetailScreen() {
             <View>
               {[
                 {
-                  name: "Nguyá»…n VÄƒn A",
+                  name: "Nguyễn Văn A",
                   rating: 5,
                   comment:
-                    "Sáº£n pháº©m ráº¥t tá»‘t, Ä‘Ã³ng gÃ³i Ä‘áº¹p, giao nhanh. Mua lÃ m quÃ  biáº¿u ráº¥t Æ°ng Ã½!",
+                    "Sản phẩm rất tốt, đóng gói đẹp, giao nhanh. Mua làm quà biếu rất ưng ý!",
                 },
                 {
-                  name: "Tráº§n Thá»‹ B",
+                  name: "Trần Thị B",
                   rating: 4,
                   comment:
-                    "Cháº¥t lÆ°á»£ng tá»‘t, hÆ°Æ¡ng vá»‹ thÆ¡m ngon. Sáº½ tiáº¿p tá»¥c á»§ng há»™ shop.",
+                    "Chất lượng tốt, hương vị thơm ngon. Sẽ tiếp tục ủng hộ shop.",
                 },
               ].map((review) => (
                 <View key={review.name} style={styles.reviewItem}>
@@ -511,7 +519,7 @@ export function ProductDetailScreen() {
 
           {related.length > 0 ? (
             <View style={styles.relatedSection}>
-              <Text style={styles.relatedTitle}>Sáº£n pháº©m liÃªn quan</Text>
+              <Text style={styles.relatedTitle}>Sản phẩm liên quan</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <View style={styles.relatedRow}>
                   {related.map((item) => (
@@ -551,12 +559,12 @@ export function ProductDetailScreen() {
                 quantity,
                 type: "product",
               });
-              Toast.show({ type: "success", text1: `ÄÃ£ thÃªm ${quantity} sáº£n pháº©m vÃ o giá» hÃ ng!` });
+              Toast.show({ type: "success", text1: `Đã thêm ${quantity} sản phẩm vào giỏ hàng!` });
             }}
             style={[styles.ctaButton, styles.ctaPrimary]}
           >
             <MaterialIcons color={colors.white} name="shopping-bag" size={16} />
-            <Text style={styles.ctaPrimaryText}>ThÃªm giá» hÃ ng</Text>
+            <Text style={styles.ctaPrimaryText}>Thêm giỏ hàng</Text>
           </Pressable>
           <Pressable
             onPress={() => {

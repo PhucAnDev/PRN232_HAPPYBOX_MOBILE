@@ -69,7 +69,7 @@ export function GiftBoxListScreen() {
     <AppScreen backgroundColor={colors.ivory} scroll={false}>
       <AppHeader
         title="Hộp Quà Cao Cấp"
-        showBack={false}
+        onBack={() => navigation.goBack()}
         showNotification
         onPressRight={() => navigation.navigate("Notifications")}
       />
@@ -166,6 +166,19 @@ export function GiftBoxDetailScreen() {
   });
 
   const giftBox = query.data;
+
+  if (query.isLoading && !giftBox) {
+    return (
+      <AppScreen backgroundColor={colors.ivory} padded>
+        <AppHeader title="Hộp Quà" onBack={() => navigation.goBack()} />
+        <EmptyState
+          icon="hourglass-empty"
+          title="Vui lòng chờ trong giây lát"
+          subtitle=""
+        />
+      </AppScreen>
+    );
+  }
 
   if (!giftBox) {
     return (
@@ -326,7 +339,7 @@ export function GiftBoxDetailScreen() {
           >
             {visibleItems.map((item, index) => (
               <View
-                key={item}
+                key={`${item}-${index}`}
                 style={[
                   styles.itemCard,
                   index % 2 === 0 ? styles.itemCardAlt : undefined,
@@ -847,8 +860,8 @@ function GiftBoxListItem({
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.listChipRow}
       >
-        {giftBox.items.map((item) => (
-          <View key={item} style={styles.listChip}>
+        {giftBox.items.map((item, index) => (
+          <View key={`${item}-${index}`} style={styles.listChip}>
             <Text style={styles.listChipText}>
               {item.split(" ").slice(0, 2).join(" ")}
             </Text>
