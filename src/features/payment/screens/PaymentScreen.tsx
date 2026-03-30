@@ -45,26 +45,32 @@ function logMomoTiming(step: string, payload?: Record<string, unknown>) {
   console.log(`${MOMO_LOG_PREFIX} ${timestamp} ${step}`);
 }
 
+function normalizeLookupText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 function isMomoCallbackUrl(url: string) {
-  try {
-    const parsed = new URL(url);
-    const path = `${parsed.host}${parsed.pathname}`.replace(/^\/+/, "").toLowerCase();
-    return path.startsWith(MOMO_CALLBACK_PATH);
-  } catch {
-    return false;
-  }
+  const normalized = (url || "").trim().toLowerCase();
+  return (
+    normalized.startsWith(`giftbox://${MOMO_CALLBACK_PATH}`) ||
+    normalized.includes(`://${MOMO_CALLBACK_PATH}`)
+  );
 }
 
 function extractOrderIdFromUrl(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    const candidate =
-      parsed.searchParams.get("orderId") ||
-      parsed.searchParams.get("orderid") ||
-      parsed.searchParams.get("order_id");
-    return candidate?.trim() || null;
-  } catch {
+  const match = url.match(/[?&](?:orderId|orderid|order_id)=([^&#]+)/i);
+  if (!match?.[1]) {
     return null;
+  }
+  try {
+    return decodeURIComponent(match[1]).trim() || null;
+  } catch {
+    return match[1].trim() || null;
   }
 }
 
@@ -131,6 +137,63 @@ export function PaymentScreen() {
     }
 
     return verifyCartEmpty();
+  }, []);
+
+  const resolveCartItemsToBackendIds = useCallback(async (items: typeof cartItems) => {
+    const hasUnresolvedItems = items.some(
+      (item) =>
+        item.type !== "custom" &&
+        !item.backendProductId &&
+        !item.backendGiftBoxId &&
+        !isGuid(item.productId),
+    );
+
+    if (!hasUnresolvedItems) {
+      return items;
+    }
+
+    try {
+      const [products, giftBoxes] = await Promise.all([api.products.list(), api.giftBoxes.list()]);
+      const productIdByName = new Map(
+        products.map((product) => [normalizeLookupText(product.name), product.id]),
+      );
+      const giftBoxIdByName = new Map(
+        giftBoxes.map((giftBox) => [normalizeLookupText(giftBox.name), giftBox.id]),
+      );
+
+      let hasResolved = false;
+      const nextItems = items.map((item) => {
+        if (
+          item.type === "product" &&
+          !item.backendProductId &&
+          !isGuid(item.productId)
+        ) {
+          const resolvedProductId = productIdByName.get(normalizeLookupText(item.name));
+          if (resolvedProductId) {
+            hasResolved = true;
+            return { ...item, backendProductId: resolvedProductId };
+          }
+        }
+
+        if (
+          item.type === "giftbox" &&
+          !item.backendGiftBoxId &&
+          !isGuid(item.productId)
+        ) {
+          const resolvedGiftBoxId = giftBoxIdByName.get(normalizeLookupText(item.name));
+          if (resolvedGiftBoxId) {
+            hasResolved = true;
+            return { ...item, backendGiftBoxId: resolvedGiftBoxId };
+          }
+        }
+
+        return item;
+      });
+
+      return hasResolved ? nextItems : items;
+    } catch {
+      return items;
+    }
   }, []);
 
   const finalizeMomoPayment = useCallback(
@@ -206,6 +269,8 @@ export function PaymentScreen() {
           orderSnapshot?.orderNumber ||
           latestOrders.find((order) => order.id === resolvedOrderId)?.orderNumber ||
           "";
+        const normalizedOrderNumber = resolvedOrderNumber.trim();
+        const orderLabel = normalizedOrderNumber ? `Đơn ${normalizedOrderNumber}` : "Đơn hàng";
 
         const mergedOrders = latestOrders.length > 0
           ? latestOrders
@@ -230,10 +295,11 @@ export function PaymentScreen() {
               : "Đơn hàng đang chờ xác nhận thanh toán",
           body:
             paymentResult === "success"
-              ? `Đơn ${resolvedOrderId} đã được tạo. Bạn có thể theo dõi chi tiết trong mục Đơn hàng.`
-              : `Đơn ${resolvedOrderId} đã tạo, vui lòng kiểm tra trạng thái thanh toán MoMo.`,
+              ? `${orderLabel} đã được tạo. Bạn có thể theo dõi chi tiết trong mục Đơn hàng.`
+              : `${orderLabel} đã tạo, vui lòng kiểm tra trạng thái thanh toán MoMo.`,
           kind: "order",
           orderId: resolvedOrderId || undefined,
+          orderNumber: normalizedOrderNumber || undefined,
           orderStatus: finalStatus,
         });
         setState(paymentResult);
@@ -241,10 +307,6 @@ export function PaymentScreen() {
           Toast.show({
             type: "success",
             text1: "Thanh toán thành công",
-          });
-          navigation.reset({
-            index: 0,
-            routes: [{ name: "MainTabs", params: { screen: "OrdersTab" } }],
           });
         }
         logMomoTiming("sync_status_complete", {
@@ -406,6 +468,12 @@ export function PaymentScreen() {
         return;
       }
 
+      let checkoutCartItems = cartItems;
+      checkoutCartItems = await resolveCartItemsToBackendIds(checkoutCartItems);
+      if (checkoutCartItems !== cartItems) {
+        setCartItems(checkoutCartItems);
+      }
+
       let payload = api.checkout.createOrderPayload({
         userId: user.id,
         paymentMethod,
@@ -413,7 +481,7 @@ export function PaymentScreen() {
         shippingAddress: draftShippingAddress,
         shippingPhone: draftShippingPhone,
         note: checkoutDraft.note || "",
-        cartItems,
+        cartItems: checkoutCartItems,
       });
       logMomoTiming("create_order_payload_ready", {
         paymentMethod,
@@ -594,6 +662,9 @@ export function PaymentScreen() {
           orderSnapshot?.orderNumber?.trim() ||
           mergedOrders.find((order) => order.id === createdOrderId)?.orderNumber?.trim() ||
           "";
+        const displayOrderLabel = resolvedDisplayOrderNumber
+          ? `Đơn ${resolvedDisplayOrderNumber}`
+          : "Đơn hàng";
         setOrderId(createdOrderId);
         setOrderNumber(resolvedDisplayOrderNumber);
         setGatewayStatus(latestGatewayStatus);
@@ -614,10 +685,11 @@ export function PaymentScreen() {
               : "Đơn hàng đang chờ xác nhận thanh toán",
           body:
             paymentResult === "success"
-              ? `Đơn ${createdOrderId} đã được tạo. Bạn có thể theo dõi chi tiết trong mục Đơn hàng.`
-              : `Đơn ${createdOrderId} đã tạo, vui lòng kiểm tra trạng thái thanh toán MoMo.`,
+              ? `${displayOrderLabel} đã được tạo. Bạn có thể theo dõi chi tiết trong mục Đơn hàng.`
+              : `${displayOrderLabel} đã tạo, vui lòng kiểm tra trạng thái thanh toán MoMo.`,
           kind: "order",
           orderId: createdOrderId || undefined,
+          orderNumber: resolvedDisplayOrderNumber || undefined,
           orderStatus: finalStatus,
         });
         setState(paymentResult);
@@ -665,6 +737,7 @@ export function PaymentScreen() {
     finalizeMomoPayment,
     initialCallbackOrderId,
     initialUrlChecked,
+    resolveCartItemsToBackendIds,
     setCartItems,
     setCheckoutDraft,
     setOrders,

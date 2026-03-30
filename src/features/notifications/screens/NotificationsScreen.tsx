@@ -9,6 +9,9 @@ import { AppNotification } from "../../../types/domain";
 import { colors, radius, spacing, typography } from "../../../theme/tokens";
 import { formatShortDate } from "../../../utils/format";
 
+const guidPattern =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
+
 export function NotificationsScreen() {
   const navigation = useNavigation<any>();
   const notifications = useAppStore((state) => state.notifications);
@@ -21,6 +24,33 @@ export function NotificationsScreen() {
       ),
     [notifications],
   );
+  const orderNumberById = useMemo(
+    () =>
+      new Map(
+        orders.map((order) => [order.id, order.orderNumber?.trim() || ""]),
+      ),
+    [orders],
+  );
+
+  const getNotificationBody = (item: AppNotification) => {
+    if (item.kind !== "order") {
+      return item.body;
+    }
+
+    const resolvedOrderNumber =
+      item.orderNumber?.trim() ||
+      (item.orderId ? orderNumberById.get(item.orderId)?.trim() || "" : "");
+
+    if (resolvedOrderNumber) {
+      const replacedGuid = item.body.replace(guidPattern, resolvedOrderNumber);
+      if (replacedGuid !== item.body) {
+        return replacedGuid;
+      }
+      return item.body;
+    }
+
+    return item.body.replace(guidPattern, "mã đơn");
+  };
 
   const onPressNotification = (item: AppNotification) => {
     markNotificationRead(item.id);
@@ -77,7 +107,7 @@ export function NotificationsScreen() {
             </View>
             <View style={styles.content}>
               <Text style={styles.title}>{item.title}</Text>
-              <Text style={styles.body}>{item.body}</Text>
+              <Text style={styles.body}>{getNotificationBody(item)}</Text>
               <Text style={styles.date}>{formatShortDate(item.createdAt)}</Text>
             </View>
           </Pressable>

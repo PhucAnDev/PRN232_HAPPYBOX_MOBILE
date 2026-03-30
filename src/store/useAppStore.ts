@@ -222,12 +222,15 @@ export const useAppStore = create<AppState>()(
 
           orders.forEach((order) => {
             const previous = previousById.get(order.id);
+            const normalizedOrderNumber = order.orderNumber?.trim() || "";
+            const orderLabel = normalizedOrderNumber ? `\u0110\u01a1n ${normalizedOrderNumber}` : "\u0110\u01a1n h\u00e0ng";
             if (!previous) {
               nextNotifications = prependNotification(nextNotifications, {
                 title: "C\u00f3 \u0111\u01a1n h\u00e0ng m\u1edbi",
-                body: `\u0110\u01a1n ${order.id} v\u1eeba xu\u1ea5t hi\u1ec7n trong l\u1ecbch s\u1eed mua h\u00e0ng.`,
+                body: `${orderLabel} v\u1eeba xu\u1ea5t hi\u1ec7n trong l\u1ecbch s\u1eed mua h\u00e0ng.`,
                 kind: "order",
                 orderId: order.id,
+                orderNumber: normalizedOrderNumber || undefined,
                 orderStatus: order.status,
               });
               return;
@@ -236,9 +239,10 @@ export const useAppStore = create<AppState>()(
             if (previous.status !== order.status) {
               nextNotifications = prependNotification(nextNotifications, {
                 title: "\u0110\u01a1n h\u00e0ng c\u1eadp nh\u1eadt tr\u1ea1ng th\u00e1i",
-                body: `\u0110\u01a1n ${order.id} ${orderStatusDescriptions[order.status]}`,
+                body: `${orderLabel} ${orderStatusDescriptions[order.status]}`,
                 kind: "order",
                 orderId: order.id,
+                orderNumber: normalizedOrderNumber || undefined,
                 orderStatus: order.status,
               });
             }
@@ -593,9 +597,12 @@ export const useAppStore = create<AppState>()(
           customBoxDraft: null,
           notifications: prependNotification(state.notifications, {
             title: "\u0110\u01a1n h\u00e0ng m\u1edbi \u0111\u00e3 \u0111\u01b0\u1ee3c t\u1ea1o",
-            body: `${order.id} \u0111ang \u0111\u01b0\u1ee3c h\u1ec7 th\u1ed1ng x\u1eed l\u00fd.`,
+            body: `${
+              order.orderNumber?.trim() ? `\u0110\u01a1n ${order.orderNumber.trim()}` : "\u0110\u01a1n h\u00e0ng"
+            } \u0111ang \u0111\u01b0\u1ee3c h\u1ec7 th\u1ed1ng x\u1eed l\u00fd.`,
             kind: "order",
             orderId: order.id,
+            orderNumber: order.orderNumber?.trim() || undefined,
             orderStatus: order.status,
           }),
         });
