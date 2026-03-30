@@ -159,6 +159,7 @@ export function HomeScreen() {
               onPress={() =>
                 navigation.navigate("ProductList", {
                   categoryId: category.id,
+                  fromHomeCategory: true,
                 })
               }
               style={styles.categoryItem}

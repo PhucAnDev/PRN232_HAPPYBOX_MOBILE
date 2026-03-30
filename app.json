@@ -3,8 +3,12 @@
     "name": "GiftBox Mobile",
     "slug": "giftbox-mobile",
     "version": "1.0.0",
+    "scheme": "giftbox",
     "orientation": "portrait",
-    "platforms": ["android", "ios"],
+    "platforms": [
+      "android",
+      "ios"
+    ],
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {

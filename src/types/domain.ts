@@ -165,9 +165,16 @@ export interface CartSummary {
 }
 
 export interface CheckoutDraft {
-  addressId: string;
   paymentMethod: PaymentMethodId;
   note: string;
+  shippingRecipientName: string;
+  shippingPhone: string;
+  shippingCity: string;
+  shippingDistrict: string;
+  shippingWard: string;
+  shippingAddressDetail: string;
+  shippingAddress: string;
+  addressId?: string;
 }
 
 export interface PaymentMethodOption {

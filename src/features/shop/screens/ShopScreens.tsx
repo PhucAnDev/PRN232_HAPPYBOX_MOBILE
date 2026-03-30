@@ -94,12 +94,16 @@ export function ProductListScreen() {
       .sort((a, b) => a - b);
   }, [page, totalPages]);
   const categories = [{ id: "all", name: "Tất Cả", icon: "🛍️" }, ...(categoriesQuery.data ?? [])];
+  const shouldShowBack =
+    (route.name === "ProductList" && navigation.canGoBack()) ||
+    (route.params?.fromHomeCategory === true && navigation.canGoBack());
 
   return (
     <View style={styles.listRoot}>
       <AppHeader
         title="Khám Phá"
-        showBack={false}
+        showBack={shouldShowBack}
+        onBack={() => navigation.goBack()}
         showNotification
         onPressRight={() => navigation.navigate("Notifications")}
       />

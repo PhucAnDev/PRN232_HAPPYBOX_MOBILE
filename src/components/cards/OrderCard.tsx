@@ -20,7 +20,7 @@ export function OrderCard({ order, onPress }: OrderCardProps) {
       <View style={styles.header}>
         <View style={styles.orderMeta}>
           <Text style={styles.orderMetaLabel}>Mã đơn:</Text>
-          <Text style={styles.orderMetaValue}>{order.id}</Text>
+          <Text style={styles.orderMetaValue}>{order.orderNumber || "--"}</Text>
         </View>
         <View style={styles.statusRow}>
           <Text style={[styles.statusPill, { color: tone, backgroundColor: `${tone}18` }]}>

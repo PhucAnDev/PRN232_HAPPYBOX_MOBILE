@@ -36,6 +36,15 @@ const navigationTheme = {
   },
 };
 
+const linking = {
+  prefixes: ["giftbox://"],
+  config: {
+    screens: {
+      Payment: "payment/momo/result",
+    },
+  },
+};
+
 function AppTabs() {
   return (
     <Tab.Navigator
@@ -55,7 +64,7 @@ function AppTabs() {
 
 export function RootNavigator() {
   return (
-    <NavigationContainer theme={navigationTheme}>
+    <NavigationContainer linking={linking} theme={navigationTheme}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Splash" component={SplashScreen} />
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
