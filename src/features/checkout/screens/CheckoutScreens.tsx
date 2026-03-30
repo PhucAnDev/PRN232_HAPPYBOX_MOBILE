@@ -13,7 +13,6 @@ import {
 } from "react-native";
 import Toast from "react-native-toast-message";
 import { useNavigation } from "@react-navigation/native";
-import { AddressCard } from "../../../components/cards/AddressCard";
 import { VoucherCard } from "../../../components/cards/VoucherCard";
 import { AppScreen, EmptyState, SheetModal } from "../../../components/common/Primitives";
 import { AppHeader } from "../../../components/navigation/AppHeader";
@@ -76,6 +75,16 @@ const isSameCart = (nextItems: CartItem[], currentItems: CartItem[]) => {
     );
   });
 };
+
+type ShippingFieldKey =
+  | "recipientName"
+  | "shippingPhone"
+  | "city"
+  | "district"
+  | "ward"
+  | "streetAddress";
+
+type ShippingFormErrors = Partial<Record<ShippingFieldKey, string>>;
 
 export function CartScreen() {
   const navigation = useNavigation<any>();
@@ -409,19 +418,23 @@ function SummaryRow({
 export function CheckoutScreen() {
   const navigation = useNavigation<any>();
   const isAuthenticated = useAppStore((state) => state.isAuthenticated);
-  const addresses = useAppStore((state) => state.addresses);
+  const user = useAppStore((state) => state.user);
   const cartItems = useAppStore((state) => state.cartItems);
   const setCartItems = useAppStore((state) => state.setCartItems);
   const appliedVoucher = useAppStore((state) => state.appliedVoucher);
   const applyVoucher = useAppStore((state) => state.applyVoucher);
   const getCartSummary = useAppStore((state) => state.getCartSummary);
   const setCheckoutDraft = useAppStore((state) => state.setCheckoutDraft);
-  const [selectedAddressId, setSelectedAddressId] = useState(
-    addresses.find((item) => item.isDefault)?.id ?? addresses[0]?.id ?? "",
-  );
   const [selectedPayment, setSelectedPayment] = useState<PaymentMethodId>("cod");
   const [note, setNote] = useState("");
   const [showVoucherSheet, setShowVoucherSheet] = useState(false);
+  const [recipientName, setRecipientName] = useState(user?.fullName ?? "");
+  const [shippingPhone, setShippingPhone] = useState(user?.phone ?? "");
+  const [city, setCity] = useState("");
+  const [district, setDistrict] = useState("");
+  const [ward, setWard] = useState("");
+  const [streetAddress, setStreetAddress] = useState("");
+  const [shippingErrors, setShippingErrors] = useState<ShippingFormErrors>({});
 
   const cartQuery = useQuery({
     queryKey: ["cart"],
@@ -443,10 +456,58 @@ export function CheckoutScreen() {
   }, [cartQuery.data, setCartItems]);
 
   const summary = getCartSummary();
-  const selectedAddress = useMemo(
-    () => addresses.find((item) => item.id === selectedAddressId) ?? null,
-    [addresses, selectedAddressId],
+  const shippingAddressPreview = useMemo(
+    () => [streetAddress.trim(), ward.trim(), district.trim(), city.trim()].filter(Boolean).join(", "),
+    [city, district, streetAddress, ward],
   );
+
+  useEffect(() => {
+    if (!user) return;
+    setRecipientName((current) => current || user.fullName || "");
+    setShippingPhone((current) => current || user.phone || "");
+  }, [user]);
+
+  const clearShippingError = (field: ShippingFieldKey) => {
+    setShippingErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  };
+
+  const validateShippingForm = (): ShippingFormErrors => {
+    const errors: ShippingFormErrors = {};
+    const normalizedPhone = shippingPhone.trim().replace(/\s+/g, "");
+
+    if (!recipientName.trim()) {
+      errors.recipientName = "Vui lòng nhập họ và tên người nhận";
+    }
+
+    if (!normalizedPhone) {
+      errors.shippingPhone = "Vui lòng nhập số điện thoại";
+    } else if (!/^\d{9,11}$/.test(normalizedPhone)) {
+      errors.shippingPhone = "Số điện thoại không hợp lệ";
+    }
+
+    if (!city.trim()) {
+      errors.city = "Vui lòng nhập Tỉnh/Thành phố";
+    }
+
+    if (!district.trim()) {
+      errors.district = "Vui lòng nhập Quận/Huyện";
+    }
+
+    if (!ward.trim()) {
+      errors.ward = "Vui lòng nhập Phường/Xã";
+    }
+
+    if (!streetAddress.trim()) {
+      errors.streetAddress = "Vui lòng nhập địa chỉ cụ thể";
+    }
+
+    return errors;
+  };
 
   if (cartItems.length === 0) {
     return (
@@ -469,49 +530,159 @@ export function CheckoutScreen() {
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.screenSection}>
           <Text style={styles.blockTitle}>ĐỊA CHỈ GIAO HÀNG</Text>
-          {selectedAddress ? (
-            <AddressCard
-              address={selectedAddress}
-              selected
-              onPress={() => undefined}
-              onEdit={() => navigation.navigate("AddressList")}
-            />
-          ) : (
-            <Pressable
-              onPress={() => navigation.navigate("AddressForm")}
-              style={styles.addAddressCard}
-            >
-              <MaterialIcons color={colors.gold} name="add" size={18} />
-              <Text style={styles.addAddressText}>Thêm địa chỉ giao hàng</Text>
-            </Pressable>
-          )}
-          {addresses.length > 1 ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.addressSelectorRow}
-            >
-              {addresses.map((address) => (
-                <Pressable
-                  key={address.id}
-                  onPress={() => setSelectedAddressId(address.id)}
-                  style={[
-                    styles.addressChip,
-                    selectedAddressId === address.id && styles.addressChipActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.addressChipText,
-                      selectedAddressId === address.id && styles.addressChipTextActive,
-                    ]}
-                  >
-                    {address.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-          ) : null}
+          <View style={styles.shippingFormCard}>
+            <View style={styles.shippingField}>
+              <Text style={styles.shippingLabel}>Họ và tên người nhận *</Text>
+              <View
+                style={[
+                  styles.shippingInputRow,
+                  shippingErrors.recipientName && styles.shippingInputRowError,
+                ]}
+              >
+                <MaterialIcons color={colors.textMuted} name="person-outline" size={16} />
+                <TextInput
+                  placeholder="Nhập họ và tên người nhận"
+                  placeholderTextColor={colors.textMuted}
+                  value={recipientName}
+                  onChangeText={(value) => {
+                    setRecipientName(value);
+                    clearShippingError("recipientName");
+                  }}
+                  style={styles.shippingInput}
+                />
+              </View>
+              {shippingErrors.recipientName ? (
+                <Text style={styles.shippingErrorText}>{shippingErrors.recipientName}</Text>
+              ) : null}
+            </View>
+
+            <View style={styles.shippingField}>
+              <Text style={styles.shippingLabel}>Số điện thoại *</Text>
+              <View
+                style={[
+                  styles.shippingInputRow,
+                  shippingErrors.shippingPhone && styles.shippingInputRowError,
+                ]}
+              >
+                <MaterialIcons color={colors.textMuted} name="phone-iphone" size={16} />
+                <TextInput
+                  placeholder="Nhập số điện thoại nhận hàng"
+                  placeholderTextColor={colors.textMuted}
+                  value={shippingPhone}
+                  onChangeText={(value) => {
+                    setShippingPhone(value);
+                    clearShippingError("shippingPhone");
+                  }}
+                  keyboardType="phone-pad"
+                  style={styles.shippingInput}
+                />
+              </View>
+              {shippingErrors.shippingPhone ? (
+                <Text style={styles.shippingErrorText}>{shippingErrors.shippingPhone}</Text>
+              ) : null}
+            </View>
+
+            <View style={styles.shippingField}>
+              <Text style={styles.shippingLabel}>Tỉnh/Thành phố *</Text>
+              <View
+                style={[styles.shippingInputRow, shippingErrors.city && styles.shippingInputRowError]}
+              >
+                <MaterialIcons color={colors.textMuted} name="location-city" size={16} />
+                <TextInput
+                  placeholder="Nhập Tỉnh/Thành phố"
+                  placeholderTextColor={colors.textMuted}
+                  value={city}
+                  onChangeText={(value) => {
+                    setCity(value);
+                    clearShippingError("city");
+                  }}
+                  style={styles.shippingInput}
+                />
+              </View>
+              {shippingErrors.city ? (
+                <Text style={styles.shippingErrorText}>{shippingErrors.city}</Text>
+              ) : null}
+            </View>
+
+            <View style={styles.shippingField}>
+              <Text style={styles.shippingLabel}>Quận/Huyện *</Text>
+              <View
+                style={[
+                  styles.shippingInputRow,
+                  shippingErrors.district && styles.shippingInputRowError,
+                ]}
+              >
+                <MaterialIcons color={colors.textMuted} name="map" size={16} />
+                <TextInput
+                  placeholder="Nhập Quận/Huyện"
+                  placeholderTextColor={colors.textMuted}
+                  value={district}
+                  onChangeText={(value) => {
+                    setDistrict(value);
+                    clearShippingError("district");
+                  }}
+                  style={styles.shippingInput}
+                />
+              </View>
+              {shippingErrors.district ? (
+                <Text style={styles.shippingErrorText}>{shippingErrors.district}</Text>
+              ) : null}
+            </View>
+
+            <View style={styles.shippingField}>
+              <Text style={styles.shippingLabel}>Phường/Xã *</Text>
+              <View
+                style={[styles.shippingInputRow, shippingErrors.ward && styles.shippingInputRowError]}
+              >
+                <MaterialIcons color={colors.textMuted} name="pin-drop" size={16} />
+                <TextInput
+                  placeholder="Nhập Phường/Xã"
+                  placeholderTextColor={colors.textMuted}
+                  value={ward}
+                  onChangeText={(value) => {
+                    setWard(value);
+                    clearShippingError("ward");
+                  }}
+                  style={styles.shippingInput}
+                />
+              </View>
+              {shippingErrors.ward ? (
+                <Text style={styles.shippingErrorText}>{shippingErrors.ward}</Text>
+              ) : null}
+            </View>
+
+            <View style={styles.shippingField}>
+              <Text style={styles.shippingLabel}>Địa chỉ cụ thể *</Text>
+              <View
+                style={[
+                  styles.shippingInputRow,
+                  shippingErrors.streetAddress && styles.shippingInputRowError,
+                ]}
+              >
+                <MaterialIcons color={colors.textMuted} name="home-work" size={16} />
+                <TextInput
+                  placeholder="Số nhà, tên đường..."
+                  placeholderTextColor={colors.textMuted}
+                  value={streetAddress}
+                  onChangeText={(value) => {
+                    setStreetAddress(value);
+                    clearShippingError("streetAddress");
+                  }}
+                  style={styles.shippingInput}
+                />
+              </View>
+              {shippingErrors.streetAddress ? (
+                <Text style={styles.shippingErrorText}>{shippingErrors.streetAddress}</Text>
+              ) : null}
+            </View>
+
+            {shippingAddressPreview ? (
+              <View style={styles.shippingPreviewCard}>
+                <Text style={styles.shippingPreviewLabel}>Địa chỉ giao hàng</Text>
+                <Text style={styles.shippingPreviewValue}>{shippingAddressPreview}</Text>
+              </View>
+            ) : null}
+          </View>
         </View>
 
         <View style={styles.screenSection}>
@@ -657,18 +828,38 @@ export function CheckoutScreen() {
               return;
             }
 
-            if (!selectedAddressId) {
+            const validationErrors = validateShippingForm();
+            if (Object.keys(validationErrors).length > 0) {
+              setShippingErrors(validationErrors);
+              const firstMessage =
+                Object.values(validationErrors)[0] ?? "Vui lòng nhập đầy đủ địa chỉ giao hàng";
               Toast.show({
                 type: "error",
-                text1: "Vui lòng chọn địa chỉ giao hàng",
+                text1: firstMessage,
               });
               return;
             }
 
+            const normalizedPhone = shippingPhone.trim().replace(/\s+/g, "");
+            const composedShippingAddress = [
+              streetAddress.trim(),
+              ward.trim(),
+              district.trim(),
+              city.trim(),
+            ]
+              .filter(Boolean)
+              .join(", ");
+
             setCheckoutDraft({
-              addressId: selectedAddressId,
               paymentMethod: selectedPayment,
               note,
+              shippingRecipientName: recipientName.trim(),
+              shippingPhone: normalizedPhone,
+              shippingCity: city.trim(),
+              shippingDistrict: district.trim(),
+              shippingWard: ward.trim(),
+              shippingAddressDetail: streetAddress.trim(),
+              shippingAddress: composedShippingAddress,
             });
             navigation.navigate("Payment", {
               paymentMethod: selectedPayment,
@@ -930,46 +1121,64 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginBottom: spacing.sm,
   },
-  addAddressCard: {
-    minHeight: 56,
+  shippingFormCard: {
+    backgroundColor: colors.white,
     borderRadius: radius.lg,
-    borderWidth: 1.5,
-    borderStyle: "dashed",
-    borderColor: colors.gold,
-    backgroundColor: colors.white,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-  },
-  addAddressText: {
-    fontSize: typography.body,
-    fontWeight: "700",
-    color: colors.gold,
-  },
-  addressSelectorRow: {
-    gap: spacing.sm,
-    paddingTop: spacing.sm,
-  },
-  addressChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: radius.full,
-    backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.border,
+    padding: spacing.base,
+    gap: spacing.base,
+    ...shadows.card,
   },
-  addressChipActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+  shippingField: {
+    gap: 6,
   },
-  addressChipText: {
+  shippingLabel: {
     fontSize: typography.caption,
     fontWeight: "700",
-    color: colors.textSoft,
+    color: colors.text,
   },
-  addressChipTextActive: {
-    color: colors.white,
+  shippingInputRow: {
+    minHeight: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  shippingInputRowError: {
+    borderColor: colors.error,
+  },
+  shippingInput: {
+    flex: 1,
+    fontSize: typography.body,
+    color: colors.text,
+    paddingVertical: 0,
+  },
+  shippingErrorText: {
+    fontSize: typography.tiny,
+    color: colors.error,
+  },
+  shippingPreviewCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.surface,
+    backgroundColor: colors.surface,
+    padding: 10,
+    gap: 4,
+  },
+  shippingPreviewLabel: {
+    fontSize: typography.tiny,
+    color: colors.textMuted,
+    fontWeight: "700",
+  },
+  shippingPreviewValue: {
+    fontSize: typography.caption,
+    color: colors.text,
+    fontWeight: "600",
   },
   orderSummaryCard: {
     backgroundColor: colors.white,

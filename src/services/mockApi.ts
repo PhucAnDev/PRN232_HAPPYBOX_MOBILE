@@ -1082,7 +1082,7 @@ export const api = {
     createOrderAndMomoPayment: async (payload: CreateOrderPayload) => {
       return request<BackendMomoPaymentResponse>(
         {
-          url: "/api/Payment/momo/create-order",
+          url: "/api/Payment/momo/create-mobile",
           method: "POST",
           data: payload,
         },

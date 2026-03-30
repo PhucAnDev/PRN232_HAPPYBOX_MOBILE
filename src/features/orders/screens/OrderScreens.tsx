@@ -245,7 +245,7 @@ export function OrderDetailScreen() {
           </Pressable>
           <View>
             <Text style={styles.detailHeaderTitle}>Chi Tiết Đơn Hàng</Text>
-            <Text style={styles.detailHeaderMeta}>{order.id}</Text>
+            <Text style={styles.detailHeaderMeta}>{order.orderNumber || "--"}</Text>
           </View>
         </View>
 
@@ -415,23 +415,25 @@ function SummaryRow({
 
 const styles = StyleSheet.create({
   tabsShell: {
-    maxHeight: 54,
     backgroundColor: colors.white,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
   tabsRow: {
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 10,
     gap: 8,
+    alignItems: "center",
   },
   tabChip: {
+    minHeight: 34,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: radius.full,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.border,
+    justifyContent: "center",
   },
   tabChipActive: {
     backgroundColor: colors.primary,

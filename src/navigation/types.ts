@@ -16,7 +16,7 @@ export type RootStackParamList = {
   SignUp: undefined;
   ForgotPassword: undefined;
   MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
-  ProductList: { categoryId?: string } | undefined;
+  ProductList: { categoryId?: string; fromHomeCategory?: boolean } | undefined;
   ProductDetail: { productId: string };
   GiftBoxList: undefined;
   GiftBoxDetail: { giftBoxId: string };

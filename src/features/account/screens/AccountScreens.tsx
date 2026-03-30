@@ -214,7 +214,7 @@ export function AccountScreen() {
             >
               <Image source={{ uri: order.items[0]?.image }} style={styles.recentOrderImage} />
               <Text numberOfLines={1} style={styles.recentOrderId}>
-                {order.id}
+                {order.orderNumber || "--"}
               </Text>
               <Text
                 style={[
