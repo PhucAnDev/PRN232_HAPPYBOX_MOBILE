@@ -447,6 +447,7 @@ export function GiftBoxDetailScreen() {
 
 export function GiftBoxBuilderScreen() {
   const navigation = useNavigation<any>();
+  const isAuthenticated = useAppStore((state) => state.isAuthenticated);
   const addToCart = useAppStore((state) => state.addToCart);
   const setCustomBoxDraft = useAppStore((state) => state.setCustomBoxDraft);
   const productsQuery = useQuery({
@@ -456,6 +457,7 @@ export function GiftBoxBuilderScreen() {
   const [step, setStep] = useState(0);
   const [selectedBox, setSelectedBox] = useState<BoxTypeOption>(boxTypes[1]);
   const [selectedItems, setSelectedItems] = useState<Record<string, number>>({});
+  const [isCreatingGiftBox, setIsCreatingGiftBox] = useState(false);
 
   const products = productsQuery.data ?? [];
   const selectedProducts = useMemo(
@@ -763,7 +765,12 @@ export function GiftBoxBuilderScreen() {
 
       <View style={styles.builderFooter}>
         <Pressable
+          disabled={isCreatingGiftBox}
           onPress={() => {
+            if (isCreatingGiftBox) {
+              return;
+            }
+
             if (step < 2) {
               if (step === 1 && selectedProducts.length === 0) {
                 Toast.show({
@@ -776,29 +783,79 @@ export function GiftBoxBuilderScreen() {
               return;
             }
 
-            setCustomBoxDraft({
-              boxTypeId: selectedBox.id,
-              boxTypeName: selectedBox.name,
-              boxPrice: selectedBox.price,
-              capacity: selectedBox.capacity,
-              items: selectedProducts,
-              totalPrice,
-            });
+            if (selectedProducts.length === 0) {
+              Toast.show({
+                type: "error",
+                text1: "Vui lòng chọn ít nhất 1 sản phẩm",
+              });
+              return;
+            }
 
-            addToCart({
-              productId: `custom-${Date.now()}`,
-              name: `Custom Gift Box - ${selectedBox.name}`,
-              image: selectedProducts[0]?.product.image ?? "",
-              price: totalPrice,
-              quantity: 1,
-              type: "custom",
-            });
+            if (!isAuthenticated) {
+              Toast.show({
+                type: "info",
+                text1: "Vui lòng đăng nhập để tạo gift box",
+              });
+              navigation.navigate("SignIn");
+              return;
+            }
 
-            Toast.show({
-              type: "success",
-              text1: "Đã thêm Gift Box vào giỏ hàng",
-            });
-            navigation.navigate("MainTabs", { screen: "CartTab" });
+            void (async () => {
+              setIsCreatingGiftBox(true);
+              try {
+                const customName = `Custom Gift Box - ${selectedBox.name}`;
+                const customDescription = `Gift box của bạn gồm ${selectedProducts.length} loại sản phẩm.`;
+                const createdGiftBox = await api.giftBoxes.createCustom({
+                  name: customName,
+                  description: customDescription,
+                  boxTypeName: selectedBox.name,
+                  boxTypePrice: selectedBox.price,
+                  totalPrice,
+                  fallbackCategoryId: selectedProducts[0]?.product.categoryId,
+                  items: selectedProducts.map((item) => ({
+                    productId: item.product.id,
+                    quantity: item.quantity,
+                  })),
+                  imageUrls: selectedProducts.map((item) => item.product.image).filter(Boolean),
+                });
+
+                setCustomBoxDraft({
+                  boxTypeId: selectedBox.id,
+                  boxTypeName: selectedBox.name,
+                  boxPrice: selectedBox.price,
+                  capacity: selectedBox.capacity,
+                  items: selectedProducts,
+                  totalPrice,
+                });
+
+                addToCart({
+                  productId: createdGiftBox.id,
+                  backendGiftBoxId: createdGiftBox.id,
+                  name: createdGiftBox.name || customName,
+                  image: createdGiftBox.image || selectedProducts[0]?.product.image || "",
+                  price: createdGiftBox.price || totalPrice,
+                  quantity: 1,
+                  type: "giftbox",
+                });
+
+                Toast.show({
+                  type: "success",
+                  text1: "Đã tạo gift box và thêm vào giỏ hàng",
+                });
+                navigation.navigate("MainTabs", { screen: "CartTab" });
+              } catch (error) {
+                const message = api.errors.getMessage(
+                  error,
+                  "Không thể tạo gift box lúc này. Vui lòng thử lại.",
+                );
+                Toast.show({
+                  type: "error",
+                  text1: message,
+                });
+              } finally {
+                setIsCreatingGiftBox(false);
+              }
+            })();
           }}
           style={styles.builderPrimaryWrap}
         >
@@ -811,7 +868,9 @@ export function GiftBoxBuilderScreen() {
                 ? "Tiếp tục chọn sản phẩm"
                 : step === 1
                   ? "Xem tổng kết"
-                  : "Thêm vào Giỏ Hàng"}
+                  : isCreatingGiftBox
+                    ? "Đang tạo gift box..."
+                    : "Thêm vào Giỏ Hàng"}
             </Text>
           </LinearGradient>
         </Pressable>

@@ -1186,7 +1186,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   sentWrap: {
-    alignItems: "center",
+    alignItems: "stretch",
     paddingTop: spacing.xl,
   },
   sentIconWrap: {

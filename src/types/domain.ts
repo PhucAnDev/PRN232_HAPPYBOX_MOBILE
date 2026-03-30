@@ -131,6 +131,7 @@ export interface AppNotification {
   body: string;
   kind: "promo" | "order" | "voucher" | "info";
   orderId?: string;
+  orderNumber?: string;
   orderStatus?: OrderStatus;
   createdAt: string;
   isRead: boolean;

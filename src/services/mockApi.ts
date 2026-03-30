@@ -108,6 +108,16 @@ interface BackendGiftBox {
   categoryName?: string | null;
   images?: BackendImage[] | null;
   boxComponents?: BackendGiftBoxComponent[] | null;
+  items?: BackendGiftBoxComponent[] | null;
+}
+
+interface BackendGiftBoxComponentConfig {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  category: string;
+  isActive: boolean;
 }
 
 interface BackendCategory {
@@ -269,6 +279,75 @@ function isGuid(value: string | undefined | null): value is string {
   );
 }
 
+function normalizeTextForMatch(value: string | undefined | null) {
+  return (value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function translateBackendMessage(message: string): string {
+  const normalized = message.trim().toLowerCase();
+
+  if (normalized.includes("an error occurred while creating the gift box")) {
+    return "Không thể tạo hộp quà lúc này. Vui lòng thử lại.";
+  }
+  if (normalized === "validation failed") {
+    return "Dữ liệu không hợp lệ.";
+  }
+  if (normalized.includes("giftbox with code") && normalized.includes("already exists")) {
+    return "Mã hộp quà đã tồn tại.";
+  }
+  if (normalized.includes("category with id") && normalized.includes("not found")) {
+    return "Không tìm thấy danh mục.";
+  }
+  if (
+    normalized.includes("product with id") &&
+    normalized.includes("not found or is inactive")
+  ) {
+    return "Sản phẩm không tồn tại hoặc đang tạm ngừng bán.";
+  }
+  if (normalized.includes("insufficient stock")) {
+    return "Số lượng tồn kho không đủ.";
+  }
+  if (
+    normalized.includes("giftboxcomponentconfig with id") &&
+    normalized.includes("not found")
+  ) {
+    return "Không tìm thấy cấu hình hộp quà.";
+  }
+  if (normalized.includes("no inventory found")) {
+    return "Không tìm thấy tồn kho của sản phẩm.";
+  }
+
+  if (normalized.includes("object reference not set to an instance of an object")) {
+    return "Dá»¯ liá»‡u sáº£n pháº©m/tá»“n kho chÆ°a Ä‘á»§. Vui lÃ²ng kiá»ƒm tra tá»“n kho.";
+  }
+  if (normalized.includes("duplicate key value violates unique constraint")) {
+    return "Dá»¯ liá»‡u bá»‹ trÃ¹ng. Vui lÃ²ng thá»­ láº¡i.";
+  }
+  if (normalized.includes("violates foreign key constraint")) {
+    return "Dá»¯ liá»‡u tham chiáº¿u khÃ´ng há»£p lá»‡. Vui lÃ²ng táº£i láº¡i vÃ  thá»­ láº¡i.";
+  }
+  if (normalized.includes("value too long for type character varying")) {
+    return "Dá»¯ liá»‡u nháº­p quÃ¡ dÃ i. Vui lÃ²ng rÃºt gá»n thÃ´ng tin.";
+  }
+
+  return message;
+}
+
+function isGenericBackendMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized === "an error occurred." ||
+    normalized === "an unexpected error occurred." ||
+    normalized.includes("an error occurred while creating the gift box") ||
+    normalized.includes("an error occurred while")
+  );
+}
+
 function getErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error)) {
     const statusCode = error.response?.status;
@@ -281,19 +360,36 @@ function getErrorMessage(error: unknown, fallback: string): string {
         }
       | undefined;
 
-    const apiMessage =
-      responseData?.message || responseData?.title || responseData?.detail;
-    if (apiMessage) return apiMessage;
-
-    if (Array.isArray(responseData?.errors) && responseData.errors.length) {
-      return responseData.errors[0];
-    }
-
+    const arrayError =
+      Array.isArray(responseData?.errors) && responseData.errors.length > 0
+        ? responseData.errors[0]
+        : undefined;
+    let fieldError: string | undefined;
     if (responseData?.errors && typeof responseData.errors === "object") {
       const firstFieldErrors = Object.values(responseData.errors)[0];
       if (Array.isArray(firstFieldErrors) && firstFieldErrors.length) {
-        return firstFieldErrors[0];
+        fieldError = firstFieldErrors[0];
       }
+    }
+
+    const apiMessage =
+      responseData?.message || responseData?.title || responseData?.detail;
+    if (apiMessage) {
+      if (isGenericBackendMessage(apiMessage)) {
+        const detailMessage = arrayError || fieldError;
+        if (detailMessage) {
+          return translateBackendMessage(detailMessage);
+        }
+      }
+      return translateBackendMessage(apiMessage);
+    }
+
+    if (arrayError) {
+      return translateBackendMessage(arrayError);
+    }
+
+    if (fieldError) {
+      return translateBackendMessage(fieldError);
     }
 
     if (error.code === "ECONNABORTED") {
@@ -316,9 +412,9 @@ function getErrorMessage(error: unknown, fallback: string): string {
       return fallback;
     }
 
-    if (error.message) return error.message;
+    if (error.message) return translateBackendMessage(error.message);
   }
-  if (error instanceof Error && error.message) return error.message;
+  if (error instanceof Error && error.message) return translateBackendMessage(error.message);
   return fallback;
 }
 
@@ -379,11 +475,11 @@ function mapProduct(product: BackendProduct): Product {
 
 function mapGiftBox(giftBox: BackendGiftBox): GiftBox {
   const image = giftBox.images?.[0]?.url || mockGiftBoxes[0]?.image || "";
-  const items =
-    giftBox.boxComponents?.map((component) => {
-      const name = component.productName?.trim() || component.productId.slice(0, 8);
-      return `${name} x${component.quantity}`;
-    }) || [];
+  const boxComponents = giftBox.boxComponents || giftBox.items || [];
+  const items = boxComponents.map((component) => {
+    const name = component.productName?.trim() || component.productId.slice(0, 8);
+    return `${name} x${component.quantity}`;
+  });
 
   return {
     id: giftBox.id,
@@ -871,6 +967,40 @@ export const api = {
         }
 
         const mapped = backendGiftBoxes.map(mapGiftBox);
+        backendGiftBoxes.forEach((giftBox, index) => {
+          if (mapped[index].items.length > 0) {
+            return;
+          }
+          const cached = giftBoxCache.get(giftBox.id);
+          if (cached?.items.length) {
+            mapped[index] = { ...mapped[index], items: cached.items };
+          }
+        });
+        const enrichTargets = backendGiftBoxes
+          .map((giftBox, index) => ({ giftBox, index }))
+          .filter(({ giftBox, index }) => isGuid(giftBox.id) && mapped[index].items.length === 0);
+
+        if (enrichTargets.length > 0) {
+          const detailResults = await Promise.allSettled(
+            enrichTargets.map(({ giftBox }) =>
+              request<BackendGiftBox>({
+                url: `/api/GiftBox/${giftBox.id}`,
+                method: "GET",
+              }),
+            ),
+          );
+
+          detailResults.forEach((result, resultIndex) => {
+            if (result.status !== "fulfilled") {
+              return;
+            }
+
+            const mappedDetail = mapGiftBox(result.value);
+            if (mappedDetail.items.length > 0) {
+              mapped[enrichTargets[resultIndex].index] = mappedDetail;
+            }
+          });
+        }
         mapped.forEach((item) => giftBoxCache.set(item.id, item));
 
         return mapped.length > 0 ? mapped : mockGiftBoxes;
@@ -898,6 +1028,143 @@ export const api = {
     boxTypes: async () => {
       await wait(120);
       return boxTypes;
+    },
+    createCustom: async (params: {
+      name: string;
+      description: string;
+      boxTypeName: string;
+      boxTypePrice: number;
+      totalPrice: number;
+      fallbackCategoryId?: string;
+      items: Array<{ productId: string; quantity: number }>;
+      imageUrls?: string[];
+    }): Promise<GiftBox> => {
+      if (!params.items.length) {
+        throw new Error("Gift box custom phải có ít nhất 1 sản phẩm.");
+      }
+
+      let backendCategories: BackendCategory[] = [];
+      try {
+        backendCategories = await request<BackendCategory[]>({
+          url: "/api/Category/GetAllCategories",
+          method: "GET",
+        });
+      } catch {
+        backendCategories = [];
+      }
+
+      const fallbackCategoryId = (params.fallbackCategoryId || "").trim();
+      let resolvedCategoryId = "";
+      if (backendCategories.length > 0) {
+        const giftCategory = backendCategories.find((category) => {
+          const normalized = normalizeTextForMatch(category.name);
+          return normalized.includes("gift") || normalized.includes("hop qua");
+        });
+        if (giftCategory) {
+          resolvedCategoryId = giftCategory.id;
+        } else if (
+          fallbackCategoryId &&
+          backendCategories.some((category) => category.id === fallbackCategoryId)
+        ) {
+          resolvedCategoryId = fallbackCategoryId;
+        } else {
+          resolvedCategoryId = backendCategories[0].id;
+        }
+      } else {
+        resolvedCategoryId = fallbackCategoryId;
+      }
+
+      if (!resolvedCategoryId) {
+        throw new Error("Không xác định được danh mục để tạo gift box custom.");
+      }
+
+      const resolvedCategoryName =
+        backendCategories.find((category) => category.id === resolvedCategoryId)?.name ||
+        "Gift Box";
+
+      let componentConfigs: BackendGiftBoxComponentConfig[] = [];
+      try {
+        componentConfigs = await request<BackendGiftBoxComponentConfig[]>(
+          {
+            url: "/api/GiftBoxComponentConfig/active",
+            method: "GET",
+          },
+          { auth: true },
+        );
+      } catch {
+        try {
+          componentConfigs = await request<BackendGiftBoxComponentConfig[]>(
+            {
+              url: "/api/GiftBoxComponentConfig",
+              method: "GET",
+            },
+            { auth: true },
+          );
+        } catch {
+          componentConfigs = [];
+        }
+      }
+
+      const normalizedBoxTypeName = normalizeTextForMatch(params.boxTypeName);
+      let componentConfig = componentConfigs.find((config) => {
+        const normalizedConfigName = normalizeTextForMatch(config.name);
+        return (
+          normalizedConfigName.includes(normalizedBoxTypeName) ||
+          normalizedBoxTypeName.includes(normalizedConfigName)
+        );
+      });
+
+      if (!componentConfig && componentConfigs.length > 0) {
+        componentConfig = [...componentConfigs].sort(
+          (left, right) =>
+            Math.abs(Number(left.price) - Number(params.boxTypePrice)) -
+            Math.abs(Number(right.price) - Number(params.boxTypePrice)),
+        )[0];
+      }
+
+      if (!componentConfig) {
+        componentConfig = await request<BackendGiftBoxComponentConfig>(
+          {
+            url: "/api/GiftBoxComponentConfig",
+            method: "POST",
+            data: {
+              name: `Mobile ${params.boxTypeName}`,
+              description: params.description,
+              price: Number(params.boxTypePrice),
+              category: resolvedCategoryName,
+              isActive: true,
+            },
+          },
+          { auth: true },
+        );
+      }
+
+      const code = `MOB-${Date.now().toString(36).toUpperCase()}`;
+      const backendGiftBox = await request<BackendGiftBox>(
+        {
+          url: "/api/GiftBox",
+          method: "POST",
+          data: {
+            code,
+            name: params.name,
+            description: params.description,
+            basePrice: Number(params.totalPrice),
+            isActive: true,
+            categoryId: resolvedCategoryId,
+            giftBoxComponentConfigId: componentConfig.id,
+            items: params.items.map((item) => ({
+              productId: item.productId,
+              quantity: item.quantity,
+            })),
+            imageUrls: (params.imageUrls || []).filter(Boolean),
+          },
+        },
+        { auth: true },
+      );
+
+      const mapped = mapGiftBox(backendGiftBox);
+      giftBoxCache.set(mapped.id, mapped);
+      return mapped;
     },
   },
   vouchers: {
@@ -1080,14 +1347,32 @@ export const api = {
   },
   payment: {
     createOrderAndMomoPayment: async (payload: CreateMomoPaymentPayload) => {
-      return request<BackendMomoPaymentResponse>(
-        {
-          url: "/api/Payment/momo/create-mobile",
-          method: "POST",
-          data: payload,
-        },
-        { auth: true },
-      );
+      try {
+        return await request<BackendMomoPaymentResponse>(
+          {
+            url: "/api/Payment/momo/create-mobile",
+            method: "POST",
+            data: payload,
+          },
+          { auth: true },
+        );
+      } catch (error) {
+        if (axios.isAxiosError(error)) {
+          const statusCode = error.response?.status;
+          // Hỗ trợ BE cũ chỉ có /momo/create (chưa có /momo/create-mobile)
+          if (statusCode === 404 || statusCode === 405) {
+            return request<BackendMomoPaymentResponse>(
+              {
+                url: "/api/Payment/momo/create",
+                method: "POST",
+                data: payload,
+              },
+              { auth: true },
+            );
+          }
+        }
+        throw error;
+      }
     },
     createMomoPayment: async (payload: CreateMomoPaymentPayload) => {
       return request<BackendMomoPaymentResponse>(
